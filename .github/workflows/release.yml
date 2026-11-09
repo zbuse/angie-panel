@@ -148,7 +148,8 @@ jobs:
 
       - name: Stage .deb package
         run: |
-          mapfile -t debs < <(find backend/target -type f -name '*.deb' -print)
+          shopt -s nullglob
+          debs=(backend/target/${{ matrix.target }}/debian/*.deb)
           if [ ${#debs[@]} -eq 0 ]; then
             echo "::error::cargo-deb did not produce a .deb package"
             exit 1
