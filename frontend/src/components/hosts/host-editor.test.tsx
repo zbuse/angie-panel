@@ -68,6 +68,18 @@ function createQueryClient() {
 }
 
 describe('host editor validation', () => {
+  it('shows the proxy template picker only under Details', async () => {
+    const user = userEvent.setup()
+    stubFetch()
+    renderForm()
+
+    expect(screen.getByRole('combobox', { name: 'Host template' })).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'SSL' }))
+    expect(screen.queryByRole('combobox', { name: 'Host template' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'Details' }))
+    expect(screen.getByRole('combobox', { name: 'Host template' })).toBeInTheDocument()
+  })
+
   it('accepts FQDNs and rejects junk in isValidDomain', () => {
     expect(isValidDomain('example.com')).toBe(true)
     expect(isValidDomain('*.example.com')).toBe(true)

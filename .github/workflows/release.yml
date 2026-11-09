@@ -1,6 +1,6 @@
 # Release: on v* tags, build the frontend, cross-compile static musl binaries for
-# arm64 + x86_64 with cargo-zigbuild, package them with cargo-deb, and publish a
-# GitHub release with the .deb files, install.sh and SHA256 checksums.
+# arm64 + x86_64 with cargo-zigbuild, package them as .deb and .rpm, and publish
+# a GitHub release with both package formats, install.sh and SHA256 checksums.
 name: Release
 
 on:
@@ -47,16 +47,20 @@ jobs:
           path: frontend/dist
           if-no-files-found: error
 
-  build-deb:
-    name: Build .deb (${{ matrix.target }})
+  build-packages:
+    name: Build Linux packages (${{ matrix.target }})
     needs: frontend
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - aarch64-unknown-linux-musl
-          - x86_64-unknown-linux-musl
+        include:
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            rpm_arch: aarch64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            rpm_arch: x86_64
     steps:
       - uses: actions/checkout@v6
 
@@ -87,15 +91,18 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Install cargo-zigbuild and cargo-deb
-        run: cargo install --locked cargo-zigbuild cargo-deb
+        run: |
+          cargo install --locked cargo-zigbuild cargo-deb
+          sudo apt-get update
+          sudo apt-get install -y rpm
 
       # Replace the committed dev fixture with the full public-domain country
-      # dataset so the .deb ships real geo data. Best-effort: on a download
+      # dataset so both packages ship real geo data. Best-effort: on a download
       # failure the fixture ships and geo blocking is simply narrow (never broken).
       - name: Build GeoIP dataset
         run: ./scripts/build-geoip-data.sh backend/data/geoip-countries.csv || echo "geoip build failed; shipping fixture"
 
-      # Vendor acme.sh core + the supported dnsapi plugins so the .deb ships the
+      # Vendor acme.sh core + the supported dnsapi plugins so both packages ship the
       # DNS-01 provider hook's runtime. Pinned tag; fails the build if unavailable
       # (unlike geoip, the provider hook is non-functional without these).
       - name: Vendor acme.sh dnsapi plugins
@@ -138,10 +145,45 @@ jobs:
         working-directory: backend
         run: cargo deb --target ${{ matrix.target }} --no-build --no-strip
 
+      - name: Package .rpm (rpmbuild)
+        env:
+          RPM_ARCH: ${{ matrix.rpm_arch }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          topdir="$RUNNER_TEMP/rpmbuild"
+          sources="$topdir/SOURCES"
+          mkdir -p "$sources/dnsapi" "$topdir/BUILD" "$topdir/BUILDROOT" \
+            "$topdir/RPMS" "$topdir/SPECS" "$topdir/SRPMS"
+
+          cp "backend/target/${{ matrix.target }}/release/angie-panel" "$sources/"
+          cp "backend/target/${{ matrix.target }}/release/apctl" "$sources/"
+          cp LICENSE "$sources/"
+          cp packaging/angie-panel.toml "$sources/"
+          cp packaging/systemd/*.service "$sources/"
+          cp packaging/polkit/10-angie-panel.rules "$sources/"
+          cp packaging/tmpfiles/angie-panel.conf "$sources/"
+          cp packaging/snippets/*.conf "$sources/"
+          cp backend/data/geoip-countries.csv "$sources/"
+          cp packaging/acme.sh/acme.sh packaging/acme.sh/VENDOR.txt "$sources/"
+          cp packaging/acme.sh/dnsapi/*.sh "$sources/dnsapi/"
+          cp packaging/man/*.1 packaging/completions/* "$sources/"
+          sed "s/@VERSION@/${version}/g" packaging/rpm/angie-panel.spec.in \
+            > "$topdir/SPECS/angie-panel.spec"
+          if grep -q '@VERSION@' "$topdir/SPECS/angie-panel.spec"; then
+            echo "::error::RPM spec version substitution failed"
+            exit 1
+          fi
+          rpmbuild --define "_topdir $topdir" --target "${RPM_ARCH}-redhat-linux" \
+            -bb "$topdir/SPECS/angie-panel.spec"
+          find "$topdir/RPMS" -type f -name '*.rpm' -exec cp {} . \;
+
       - uses: actions/upload-artifact@v7
         with:
           name: deb-${{ matrix.target }}
-          path: backend/target/${{ matrix.target }}/debian/*.deb
+          path: |
+            backend/target/${{ matrix.target }}/debian/*.deb
+            angie-panel-*.rpm
           if-no-files-found: error
 
   # Standalone apctl for operators who drive the panel from a workstation.
@@ -328,7 +370,7 @@ jobs:
 
   release:
     name: Publish GitHub release
-    needs: [build-deb, build-cli]
+    needs: [build-packages, build-cli]
     runs-on: ubuntu-latest
     # Job-level env so the sign step's `if:` can read whether a key is set
     # (secrets cannot be referenced directly in `if:` conditions).
@@ -360,10 +402,10 @@ jobs:
           # nullglob: a CLI target whose runner was unavailable must leave the
           # checksum list short, not insert a literal "apctl-*.zip" entry.
           shopt -s nullglob
-          sha256sum -- *.deb apctl-*.tar.gz apctl-*.zip install.sh > SHA256SUMS.txt
+          sha256sum -- *.deb *.rpm apctl-*.tar.gz apctl-*.zip install.sh > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      # GPG-sign the artifacts (detached ASCII .asc for each .deb, install.sh,
+      # GPG-sign the artifacts (detached ASCII .asc for each package, install.sh,
       # and SHA256SUMS.txt) when a signing key is configured. Gated on the
       # secret so forks / unconfigured repos still cut an (unsigned) release
       # instead of failing. Set repo secrets GPG_PRIVATE_KEY (ASCII-armored)
@@ -374,7 +416,7 @@ jobs:
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
           shopt -s nullglob
-          for f in dist/*.deb dist/apctl-*.tar.gz dist/apctl-*.zip \
+          for f in dist/*.deb dist/*.rpm dist/apctl-*.tar.gz dist/apctl-*.zip \
                    dist/install.sh dist/SHA256SUMS.txt; do
             gpg --batch --yes --pinentry-mode loopback \
                 --passphrase "${GPG_PASSPHRASE:-}" \

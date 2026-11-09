@@ -738,7 +738,8 @@ fn force_ssl_needs_a_ready_cert() {
     // force_ssl is inert without a certificate to redirect to: emitting the 301
     // would bounce visitors into a TLS error during the first-issuance window
     // (PLAN.md §4). base_host already has force_ssl = true.
-    let host = base_host(1, "app.example.com");
+    let mut host = base_host(1, "app.example.com");
+    host.forward_scheme = Scheme::Https;
     assert!(host.force_ssl);
     let files = generate(&input(
         vec![host],
@@ -749,6 +750,7 @@ fn force_ssl_needs_a_ready_cert() {
     let (_, body) = only_host_file(&files);
     assert!(!body.contains("return 301"), "no cert -> no redirect");
     assert!(!body.contains("listen 443"), "no cert -> no TLS listener");
+    assert!(body.contains("proxy_pass https://host_1;"));
 }
 
 #[test]

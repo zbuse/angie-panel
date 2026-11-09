@@ -542,22 +542,30 @@ impl HostTemplateRow {
 
 pub async fn list_host_templates(
     db: &SqlitePool,
+    user_id: i64,
     kind: HostTemplateKind,
 ) -> anyhow::Result<Vec<HostTemplate>> {
     let rows = sqlx::query_as::<_, HostTemplateRow>(
         "SELECT id, kind, name, value, created_at, updated_at FROM host_templates \
-         WHERE kind = ? ORDER BY name COLLATE NOCASE, id",
+         WHERE user_id = ? AND kind = ? ORDER BY name COLLATE NOCASE, id",
     )
+    .bind(user_id)
     .bind(kind.as_str())
     .fetch_all(db)
     .await?;
     rows.into_iter().map(HostTemplateRow::into_model).collect()
 }
 
-pub async fn get_host_template(db: &SqlitePool, id: i64) -> anyhow::Result<Option<HostTemplate>> {
+pub async fn get_host_template(
+    db: &SqlitePool,
+    user_id: i64,
+    id: i64,
+) -> anyhow::Result<Option<HostTemplate>> {
     let row = sqlx::query_as::<_, HostTemplateRow>(
-        "SELECT id, kind, name, value, created_at, updated_at FROM host_templates WHERE id = ?",
+        "SELECT id, kind, name, value, created_at, updated_at FROM host_templates \
+         WHERE user_id = ? AND id = ?",
     )
+    .bind(user_id)
     .bind(id)
     .fetch_optional(db)
     .await?;
@@ -566,14 +574,16 @@ pub async fn get_host_template(db: &SqlitePool, id: i64) -> anyhow::Result<Optio
 
 pub async fn insert_host_template(
     db: &SqlitePool,
+    user_id: i64,
     kind: HostTemplateKind,
     input: &HostTemplateInput,
 ) -> anyhow::Result<i64> {
     let now = now_epoch();
     Ok(sqlx::query_scalar(
-        "INSERT INTO host_templates (kind, name, value, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO host_templates (user_id, kind, name, value, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
     )
+    .bind(user_id)
     .bind(kind.as_str())
     .bind(&input.name)
     .bind(serde_json::to_string(&input.value)?)
@@ -585,16 +595,19 @@ pub async fn insert_host_template(
 
 pub async fn update_host_template(
     db: &SqlitePool,
+    user_id: i64,
     kind: HostTemplateKind,
     id: i64,
     input: &HostTemplateInput,
 ) -> anyhow::Result<bool> {
     let result = sqlx::query(
-        "UPDATE host_templates SET name = ?, value = ?, updated_at = ? WHERE kind = ? AND id = ?",
+        "UPDATE host_templates SET name = ?, value = ?, updated_at = ? \
+         WHERE user_id = ? AND kind = ? AND id = ?",
     )
     .bind(&input.name)
     .bind(serde_json::to_string(&input.value)?)
     .bind(now_epoch())
+    .bind(user_id)
     .bind(kind.as_str())
     .bind(id)
     .execute(db)
@@ -604,14 +617,17 @@ pub async fn update_host_template(
 
 pub async fn delete_host_template(
     db: &SqlitePool,
+    user_id: i64,
     kind: HostTemplateKind,
     id: i64,
 ) -> anyhow::Result<bool> {
-    let result = sqlx::query("DELETE FROM host_templates WHERE kind = ? AND id = ?")
-        .bind(kind.as_str())
-        .bind(id)
-        .execute(db)
-        .await?;
+    let result =
+        sqlx::query("DELETE FROM host_templates WHERE user_id = ? AND kind = ? AND id = ?")
+            .bind(user_id)
+            .bind(kind.as_str())
+            .bind(id)
+            .execute(db)
+            .await?;
     Ok(result.rows_affected() > 0)
 }
 

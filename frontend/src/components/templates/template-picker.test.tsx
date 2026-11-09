@@ -17,7 +17,7 @@ afterEach(() => {
 })
 
 describe('host template picker', () => {
-  it('applies built-in and server-shared templates and deletes custom templates', async () => {
+  it('applies built-in and personal templates, saves them in a dialog, and updates them', async () => {
     const onApply = vi.fn()
     const stored: Array<{ id: number; kind: string; name: string; value: Record<string, unknown>; created_at: number; updated_at: number }> = []
     let id = 1
@@ -30,10 +30,6 @@ describe('host template picker', () => {
         const template = { id: id++, kind: 'http', ...body, created_at: 1, updated_at: 1 }
         stored.push(template)
         return new Response(JSON.stringify(template), { status: 200 })
-      }
-      if (input === '/api/host-templates/http/1' && init?.method === 'DELETE') {
-        stored.splice(0, stored.length)
-        return new Response(JSON.stringify({ ok: true }), { status: 200 })
       }
       if (input === '/api/host-templates/http/1' && init?.method === 'PUT') {
         const body = JSON.parse(String(init.body)) as { name: string; value: Record<string, unknown> }
@@ -61,8 +57,9 @@ describe('host template picker', () => {
     await userEvent.click(screen.getByRole('option', { name: 'HTTP · WebSocket service' }))
     expect(onApply).toHaveBeenLastCalledWith({ websockets_upgrade: true })
 
-    vi.stubGlobal('prompt', () => 'My HTTP setup')
-    await userEvent.click(screen.getByRole('button', { name: 'Save current as template' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save as template' }))
+    await userEvent.type(screen.getByRole('textbox', { name: 'Template name' }), 'My HTTP setup')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     await vi.waitFor(() => expect(stored).toHaveLength(1))
     expect(stored).toEqual([expect.objectContaining({
       id: 1,
@@ -76,13 +73,11 @@ describe('host template picker', () => {
     await userEvent.click(screen.getByRole('combobox', { name: 'Host template' }))
     await userEvent.click(screen.getByRole('option', { name: 'My HTTP setup' }))
     expect(onApply).toHaveBeenLastCalledWith({ websockets_upgrade: true, domains: [] })
-    await userEvent.click(screen.getByRole('button', { name: 'Update selected template' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Update from current settings' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       '/api/host-templates/http/1',
       expect.objectContaining({ method: 'PUT' }),
     ))
-    await userEvent.click(screen.getByRole('button', { name: 'Delete template' }))
-    await vi.waitFor(() => expect(stored).toEqual([]))
-    expect(fetchMock).toHaveBeenCalledWith('/api/host-templates/http/1', expect.objectContaining({ method: 'DELETE' }))
-  })
+  }, 10_000)
 })

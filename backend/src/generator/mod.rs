@@ -1281,7 +1281,15 @@ fn gen_host(
             // Force SSL off: :80 serves the site over plain HTTP alongside the
             // :443 server below. Both carry the same status_zone; Angie
             // aggregates the two servers' metrics into it (verified on 1.11.8).
-            gen_http_server(&mut out, &zone, &server_names, ipv6, host, input)?;
+            gen_http_server(
+                &mut out,
+                &zone,
+                &server_names,
+                ipv6,
+                host,
+                input,
+                forward_scheme,
+            )?;
         }
         out.push('\n');
 
@@ -1345,7 +1353,15 @@ fn gen_host(
         // render would send visitors into a TLS error (PLAN.md §4
         // first-issuance window). The redirect returns on its own once the
         // certificate goes ready.
-        gen_http_server(&mut out, &zone, &server_names, ipv6, host, input)?;
+        gen_http_server(
+            &mut out,
+            &zone,
+            &server_names,
+            ipv6,
+            host,
+            input,
+            forward_scheme,
+        )?;
     }
 
     Ok((filename, out))
@@ -1361,6 +1377,7 @@ fn gen_http_server(
     ipv6: bool,
     host: &ProxyHost,
     input: &GeneratorInput,
+    forward_scheme: Scheme,
 ) -> anyhow::Result<()> {
     let _ = writeln!(out, "server {{");
     let _ = writeln!(out, "    listen 80;");

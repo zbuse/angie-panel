@@ -858,39 +858,6 @@ export function HostEditorForm({
 
   return (
     <form className="flex flex-col overflow-hidden" onSubmit={handleSubmit} noValidate>
-      <TemplatePicker
-        kind="http"
-        builtIns={[
-          { id: 'http-standard', name: t('templates.builtIn.standardHttp'), value: { websockets_upgrade: false, block_exploits: true } },
-          { id: 'http-websocket', name: t('templates.builtIn.websocket'), value: { websockets_upgrade: true, block_exploits: true } },
-          { id: 'http-internal', name: t('templates.builtIn.internal'), value: { websockets_upgrade: false, force_ssl: false, http3: false } },
-        ]}
-        value={{
-          ...form,
-          domains: [],
-          forward_host: '',
-          forward_port: '80',
-          certificate_id: null,
-          access_list_id: null,
-          upstream_pool_id: null,
-          new_cert: false,
-          mtls_ca_pem: '',
-          advanced_snippet: '',
-        } as unknown as Record<string, unknown>}
-        onApply={(value) => patch({
-          ...(value as Partial<FormState>),
-          domains: form.domains,
-          forward_scheme: form.forward_scheme,
-          forward_host: form.forward_host,
-          forward_port: form.forward_port,
-          certificate_id: form.certificate_id,
-          access_list_id: form.access_list_id,
-          upstream_pool_id: form.upstream_pool_id,
-          new_cert: false,
-          mtls_ca_pem: '',
-          advanced_snippet: '',
-        })}
-      />
       <Tabs
         value={tab}
         onValueChange={setTab}
@@ -979,6 +946,39 @@ export function HostEditorForm({
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
         <TabsContent value="details" className="space-y-4">
+          <TemplatePicker
+            kind="http"
+            builtIns={[
+              { id: 'http-standard', name: t('templates.builtIn.standardHttp'), value: { websockets_upgrade: false, block_exploits: true } },
+              { id: 'http-websocket', name: t('templates.builtIn.websocket'), value: { websockets_upgrade: true, block_exploits: true } },
+              { id: 'http-internal', name: t('templates.builtIn.internal'), value: { websockets_upgrade: false, force_ssl: false, http3: false } },
+            ]}
+            value={{
+              ...form,
+              domains: [],
+              forward_host: '',
+              forward_port: '80',
+              certificate_id: null,
+              access_list_id: null,
+              upstream_pool_id: null,
+              new_cert: false,
+              mtls_ca_pem: '',
+              advanced_snippet: '',
+            } as unknown as Record<string, unknown>}
+            onApply={(value) => patch({
+              ...(value as Partial<FormState>),
+              domains: form.domains,
+              forward_scheme: form.forward_scheme,
+              forward_host: form.forward_host,
+              forward_port: form.forward_port,
+              certificate_id: form.certificate_id,
+              access_list_id: form.access_list_id,
+              upstream_pool_id: form.upstream_pool_id,
+              new_cert: false,
+              mtls_ca_pem: '',
+              advanced_snippet: '',
+            })}
+          />
           {/* Keeps the id: submitting with no domains focuses it (see fail()). */}
           <DomainChipsField
             id="host-domain-input"

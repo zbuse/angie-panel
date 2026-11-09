@@ -26,7 +26,8 @@ Built for small always-on boxes: a single static binary, no runtime dependencies
 - **The panel never runs as root.** It generates config as an unprivileged user; a small
   auditable helper — the same binary, invoked through a systemd oneshot unit behind polkit
   — is the only thing that writes to `/etc`.
-- **No Docker anywhere.** One `.deb`, one systemd service, one SQLite file.
+- **No Docker anywhere.** One native package (`.deb` or `.rpm`), one systemd service,
+  one SQLite file.
 - **Uptime monitoring built in.** Per-host TCP and HTTP(S) checks with history, shown as
   an uptime bar right in the host list.
 - **A real CLI, not just a web UI.** `apctl status`, `apctl apply`, and `export`/`import`
@@ -54,6 +55,10 @@ less install.sh          # read it before running it
 sudo bash install.sh
 ```
 
+RPM packages for `x86_64` and `aarch64` are also attached to each release. On an
+RPM-based system with the Angie repository configured, install one with
+`sudo dnf install ./angie-panel-<version>-1.<arch>.rpm`.
+
 There is no default password. Read the one-time setup token and create the first admin:
 
 ```bash
@@ -68,9 +73,9 @@ token. To drive the panel from your own machine, install it with Homebrew
 (`brew install maxname/tap/apctl`, macOS and Linux) or download the standalone binary for
 your platform. Both are covered in the [CLI guide](docs/cli.md).
 
-Releases ship `.deb` packages for both architectures, standalone `apctl` binaries for six
-platforms, `SHA256SUMS.txt`, and detached GPG signatures. Verify against this fingerprint —
-not against the key bundled in the release, which proves nothing on its own:
+Releases ship `.deb` and `.rpm` packages for both architectures, standalone `apctl` binaries
+for six platforms, `SHA256SUMS.txt`, and detached GPG signatures. Verify against this
+fingerprint — not against the key bundled in the release, which proves nothing on its own:
 
 ```
 E81C 9989 402A 5C15 B0DD  21B9 2177 3F03 FDFC 43ED
@@ -113,7 +118,7 @@ handful of oneshot systemd units the panel can start through polkit, and nothing
 ```
 frontend/    React 19 + Vite + Tailwind + shadcn/ui
 backend/     Rust: axum, sqlx/SQLite, config generator, ACME hook, root helper
-packaging/   .deb metadata, systemd units, polkit rules, install.sh
+packaging/   .deb/.rpm metadata, systemd units, polkit rules, install.sh
 e2e/         real Angie + pebble, exercising issuance end to end
 docs/        installation, certificates, CLI, security, troubleshooting
 ```

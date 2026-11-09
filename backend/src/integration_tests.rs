@@ -600,7 +600,7 @@ async fn proxy_hosts_can_share_a_global_upstream_pool() {
 }
 
 #[tokio::test]
-async fn shared_host_templates_are_kind_scoped_validated_and_crud_managed() {
+async fn host_templates_are_user_scoped_kind_scoped_validated_and_crud_managed() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;
 
@@ -619,6 +619,79 @@ async fn shared_host_templates_are_kind_scoped_validated_and_crud_managed() {
     let id = created["id"].as_i64().unwrap();
     assert_eq!(created["kind"], json!("http"));
     assert_eq!(created["value"]["websockets_upgrade"], json!(false));
+
+    let second_user = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/users",
+            Some(json!({"email":"second@example.com","password":"secret123","role":"admin"})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second_user.status(), StatusCode::OK);
+    let second_login = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/auth/login",
+            Some(json!({"email":"second@example.com","password":"secret123"})),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second_login.status(), StatusCode::OK);
+    let second_cookie = session_cookie(&second_login);
+
+    let second_user_templates = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/host-templates/http",
+            None,
+            Some(&second_cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(second_user_templates).await, json!([]));
+
+    let same_name = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/host-templates/http",
+            Some(json!({"name":"Standard","value":{"websockets_upgrade":true}})),
+            Some(&second_cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(same_name.status(), StatusCode::OK);
+    let foreign_id = body_json(same_name).await["id"].as_i64().unwrap();
+
+    let foreign_update = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/host-templates/http/{id}"),
+            Some(json!({"name":"Stolen","value":{}})),
+            Some(&second_cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(foreign_update.status(), StatusCode::NOT_FOUND);
+
+    let foreign_delete = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/host-templates/http/{id}"),
+            None,
+            Some(&second_cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(foreign_delete.status(), StatusCode::NOT_FOUND);
 
     let stream_templates = app
         .clone()
@@ -695,6 +768,7 @@ async fn shared_host_templates_are_kind_scoped_validated_and_crud_managed() {
     assert_eq!(deleted.status(), StatusCode::OK);
 
     let list = app
+        .clone()
         .oneshot(request(
             Method::GET,
             "/api/host-templates/http",
@@ -704,6 +778,23 @@ async fn shared_host_templates_are_kind_scoped_validated_and_crud_managed() {
         .await
         .unwrap();
     assert_eq!(body_json(list).await, json!([]));
+
+    let second_user_list = app
+        .oneshot(request(
+            Method::GET,
+            "/api/host-templates/http",
+            None,
+            Some(&second_cookie),
+        ))
+        .await
+        .unwrap();
+    let second_user_templates = body_json(second_user_list).await;
+    assert_eq!(second_user_templates.as_array().unwrap().len(), 1);
+    assert_eq!(second_user_templates[0]["id"], json!(foreign_id));
+    assert_eq!(
+        second_user_templates[0]["value"]["websockets_upgrade"],
+        json!(true)
+    );
 }
 
 #[tokio::test]

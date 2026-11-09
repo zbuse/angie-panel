@@ -77,6 +77,12 @@ const hostsRoute = createRoute({
   component: lazyRouteComponent(() => import('@/pages/hosts'), 'HostsPage'),
 })
 
+const templatesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/templates',
+  component: lazyRouteComponent(() => import('@/pages/templates'), 'TemplatesPage'),
+})
+
 const redirectHostsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/redirect-hosts',
@@ -167,6 +173,7 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     dashboardRoute,
     hostsRoute,
+    templatesRoute,
     redirectHostsRoute,
     deadHostsRoute,
     streamsRoute,

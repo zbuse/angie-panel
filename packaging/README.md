@@ -1,8 +1,8 @@
 # angie-panel — packaging
 
 Packaging artifacts for **angie-panel**, a web configurator for the Angie
-reverse proxy, deployed as a native systemd service on Debian 12/13
-(arm64 / amd64; primary target: Armbian SBCs such as the NanoPi R4S).
+reverse proxy, deployed as a native systemd service. Debian packages target
+Debian 12/13; RPM packages target x86_64 and aarch64 RPM-based distributions.
 
 ## Contents
 
@@ -15,11 +15,21 @@ reverse proxy, deployed as a native systemd service on Debian 12/13
 | `polkit/10-angie-panel.rules` | `/usr/share/polkit-1/rules.d/` | Authorizes the `angie-panel` user to start exactly the three helper units — nothing else. |
 | `angie-panel.toml` | `/etc/angie-panel.toml` (dpkg conffile) | Default panel configuration. Root-owned; privilege-relevant switches live here, not in the panel DB. |
 | `debian/postinst`, `debian/prerm`, `debian/postrm` | maintainer scripts | For `cargo-deb` (with the `systemd-units` feature, which fills in the `#DEBHELPER#` token). Create/remove the service account and `/var/lib/angie-panel`. |
+| `rpm/angie-panel.spec.in` | RPM spec template | Release workflow substitutes the version, stages the build assets, then builds `.rpm` packages with `rpmbuild`. Creates the service account and data directories and manages the systemd unit. |
 | `install.sh` | run by the user | End-user installer: preflight checks, Angie apt repo, both packages, safe bind-address selection, setup token output. Messages are in Russian (target audience). |
 
 Package dependencies (set manually in `Cargo.toml` / cargo-deb metadata —
 auto-detection is empty for a static musl binary):
 `angie (>= 1.11), dbus, polkitd`.
+The RPM spec declares the equivalent dependencies (`angie`, `dbus`, `polkit`,
+`systemd`, `shadow-utils`, `bash`, and `curl`).
+
+RPM installs use the same paths and service model as the Debian package. On a
+configured Angie RPM repository, install a release package with:
+
+```sh
+sudo dnf install ./angie-panel-<version>-1.<arch>.rpm
+```
 
 ## Security model
 

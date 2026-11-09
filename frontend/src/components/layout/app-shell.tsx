@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useRouter, useRouterState } from '@tanstack/react-router'
 import {
   Cloud,
+  Copy,
   CornerUpRight,
   FileQuestion,
   Globe,
@@ -67,6 +68,7 @@ const NAV_SECTIONS = [
       { to: '/streams', labelKey: 'nav.streams', icon: Network, exact: false },
       { to: '/sni-routers', labelKey: 'nav.sniRouters', icon: Split, exact: false },
       { to: '/upstream-pools', labelKey: 'nav.upstreamPools', icon: Server, exact: false },
+      { to: '/templates', labelKey: 'nav.templates', icon: Copy, exact: false },
     ],
   },
   {
