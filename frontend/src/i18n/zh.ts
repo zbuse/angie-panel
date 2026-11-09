@@ -115,14 +115,14 @@ export const zh: typeof en = {
   setup: {
     title: '初始设置',
     description: '创建此面板的管理员账户',
-    token: '设置令牌',
+    token: '初始令牌',
     email: '邮箱',
     password: '密码',
     confirmPassword: '确认密码',
     submit: '完成设置',
     submitting: '正在设置…',
     passwordMismatch: '两次输入的密码不一致',
-    invalidToken: '设置令牌无效',
+    invalidToken: '令牌无效',
   },
   dashboard: {
     title: '仪表盘',
@@ -970,7 +970,7 @@ export const zh: typeof en = {
     },
   },
   blocklist: {
-    title: '已封禁 IP',
+    title: 'IP屏蔽',
     subtitle: '全局拒绝恶意IP和网段。与其他配置更改一样，将在下一次应用配置时生效。',
     address: 'IP 或 CIDR',
     reason: '原因（可选）',
