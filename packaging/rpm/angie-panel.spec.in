@@ -36,6 +36,7 @@ install -D -m 0644 %{_sourcedir}/10-angie-panel.rules %{buildroot}%{_datadir}/po
 install -D -m 0644 %{_sourcedir}/angie-panel.conf %{buildroot}%{_prefix}/lib/tmpfiles.d/angie-panel.conf
 
 install -D -m 0644 %{_sourcedir}/block-exploits.conf %{buildroot}%{_datadir}/angie-panel/snippets/block-exploits.conf
+install -D -m 0644 %{_sourcedir}/map.conf %{buildroot}%{_datadir}/angie-panel/snippets/map.conf
 install -D -m 0644 %{_sourcedir}/cache-assets.conf %{buildroot}%{_datadir}/angie-panel/snippets/cache-assets.conf
 install -D -m 0644 %{_sourcedir}/geoip-countries.csv %{buildroot}%{_datadir}/angie-panel/geoip-countries.csv
 install -D -m 0755 %{_sourcedir}/acme.sh %{buildroot}%{_datadir}/angie-panel/acme.sh/acme.sh

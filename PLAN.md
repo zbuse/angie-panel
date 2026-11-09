@@ -197,7 +197,7 @@ apply_history id, timestamp(UTC epoch), db_revision, diff, result, report(JSON)
                     #   [challenge=dns|alpn] [key_type=…] [email=…] [enabled=off];
                     # + скрытый server-блок с server_name <domains> и acme <name>;
   20-host-<id>-<slug>.conf   # по одному файлу на proxy-хост
-/usr/share/angie-panel/snippets/   # block-exploits.conf, cache-assets.conf —
+/usr/share/angie-panel/snippets/   # block-exploits.conf, map.conf, cache-assets.conf —
                     # включаются absolute-путём, принадлежат пакету (апгрейд обновляет,
                     # детектор дрейфа их игнорирует)
 ```

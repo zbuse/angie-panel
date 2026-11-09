@@ -126,7 +126,7 @@ export function TemplatePicker({
 
   return (
     <>
-    <div className="flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-end">
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
       <div className="min-w-52 flex-1 space-y-2">
         <label className="text-sm font-medium">{t('templates.pick')}</label>
         <Select value={selected} onValueChange={choose}>

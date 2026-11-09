@@ -192,6 +192,17 @@ fn golden_00_panel() {
 }
 
 #[test]
+fn golden_00_map() {
+    let files = generate(&input(
+        vec![],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    assert_golden("00-map.conf", &files["00-map.conf"]);
+}
+
+#[test]
 fn golden_10_acme_empty() {
     let files = generate(&input(
         vec![],
