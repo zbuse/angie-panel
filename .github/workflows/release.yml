@@ -381,6 +381,7 @@ jobs:
   release:
     name: Publish GitHub release
     needs: [build-packages, build-cli]
+    if: ${{ always() && needs.build-packages.result == 'success' }}
     runs-on: ubuntu-latest
     # Job-level env so the sign step's `if:` can read whether a key is set
     # (secrets cannot be referenced directly in `if:` conditions).
