@@ -126,26 +126,17 @@ export function TemplatePicker({
 
   return (
     <>
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-      <div className="min-w-52 flex-1 space-y-2">
-        <label className="text-sm font-medium">{t('templates.pick')}</label>
+    <div className="space-y-2">
+      <label className="text-sm font-medium">{t('templates.pick')}</label>
+      <div className="flex gap-2">
         <Select value={selected} onValueChange={choose}>
-          <SelectTrigger aria-label={t('templates.pick')}><SelectValue placeholder={t('templates.choose')} /></SelectTrigger>
+          <SelectTrigger className="min-w-0 flex-1" aria-label={t('templates.pick')}><SelectValue placeholder={t('templates.choose')} /></SelectTrigger>
           <SelectContent>
             {builtIns.map((entry) => <SelectItem key={entry.id} value={entry.id}>{entry.name}</SelectItem>)}
             {custom.length > 0 && <SelectItem value="custom-heading" disabled>{t('templates.custom')}</SelectItem>}
             {custom.map((entry) => <SelectItem key={entry.id} value={`custom:${entry.id}`}>{entry.name}</SelectItem>)}
           </SelectContent>
         </Select>
-        {templatesQuery.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {t('templates.loadFailed')}: {templatesQuery.error instanceof ApiError
-              ? templatesQuery.error.message
-              : t('common.error')}
-          </p>
-        )}
-      </div>
-      <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" onClick={openSaveDialog} disabled={saveMutation.isPending || updateMutation.isPending}>
           {t('templates.save')}
         </Button>
@@ -158,6 +149,13 @@ export function TemplatePicker({
           {t('templates.update')}
         </Button>
       </div>
+      {templatesQuery.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {t('templates.loadFailed')}: {templatesQuery.error instanceof ApiError
+            ? templatesQuery.error.message
+            : t('common.error')}
+        </p>
+      )}
     </div>
     <Dialog open={dialogMode !== null} onOpenChange={(open) => {
       if (!open && !saveMutation.isPending && !updateMutation.isPending) setDialogMode(null)
