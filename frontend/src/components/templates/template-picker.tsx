@@ -146,12 +146,11 @@ export function TemplatePicker({
         )}
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="outline" onClick={openSaveDialog} disabled={saveMutation.isPending || updateMutation.isPending}>
+        <Button type="button" variant="outline" onClick={openSaveDialog} disabled={saveMutation.isPending || updateMutation.isPending}>
           {t('templates.save')}
         </Button>
         <Button
           type="button"
-          size="sm"
           variant="outline"
           disabled={!selected.startsWith('custom:') || updateMutation.isPending}
           onClick={openUpdateDialog}
