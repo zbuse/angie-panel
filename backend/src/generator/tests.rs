@@ -1530,6 +1530,16 @@ fn resolver_omitted_when_empty() {
 }
 
 #[test]
+fn ipv6_resolvers_are_bracketed() {
+    let mut s = settings(DefaultSite::NotFound, false);
+    s.resolvers = vec!["1.1.1.1".into(), "2001:4860:4860::8888".into()];
+    let files = generate(&input(vec![], vec![], s)).unwrap();
+
+    assert!(files["00-panel.conf"]
+        .contains("resolver 1.1.1.1 [2001:4860:4860::8888] valid=300s ipv6=off;"));
+}
+
+#[test]
 fn multiple_hosts_sorted_and_named() {
     let files = generate(&input(
         vec![

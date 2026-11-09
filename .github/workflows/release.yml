@@ -183,7 +183,7 @@ jobs:
         with:
           name: deb-${{ matrix.target }}
           path: |
-            backend/target/${{ matrix.target }}/debian/*.deb
+            backend/target/debian/*.deb
             angie-panel-*.rpm
           if-no-files-found: error
 

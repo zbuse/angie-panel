@@ -154,7 +154,7 @@ pub struct Certificate {
 pub struct EffectiveSettings {
     pub default_site: DefaultSite,
     pub ipv6_enabled: bool,
-    /// Nameservers for the `resolver` directive (from resolv.conf or override).
+    /// Nameservers for the `resolver` directive (127.0.0.53 by default, or settings override).
     pub resolvers: Vec<String>,
 }
 
@@ -409,7 +409,7 @@ fn gen_panel(input: &GeneratorInput) -> String {
 
     // resolver: required by upstreams that use hostnames and by the ACME
     // module. Skipping it when empty is intentional (an empty `resolver;` is a
-    // config error) — but we log so the operator can spot a missing resolv.conf.
+    // config error) — but we warn if the caller provides no resolver.
     // `ipv6=off`: many self-hosted boxes have no working IPv6, and without this
     // Angie resolves AAAA and burns connect attempts on unreachable v6 addresses
     // (seen live: ACME upstream + hostname proxy_pass failing "Network is
@@ -417,7 +417,22 @@ fn gen_panel(input: &GeneratorInput) -> String {
     if input.settings.resolvers.is_empty() {
         tracing::warn!("no resolvers configured; omitting the `resolver` directive");
     } else {
-        let list = input.settings.resolvers.join(" ");
+        let list = input
+            .settings
+            .resolvers
+            .iter()
+            .map(|resolver| {
+                if matches!(
+                    resolver.parse::<std::net::IpAddr>(),
+                    Ok(std::net::IpAddr::V6(_))
+                ) {
+                    format!("[{resolver}]")
+                } else {
+                    resolver.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         let _ = writeln!(out, "resolver {list} valid=300s ipv6=off;");
         out.push('\n');
     }

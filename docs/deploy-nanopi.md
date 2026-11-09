@@ -124,7 +124,8 @@ angie -t && systemctl reload angie
 
 > **Не добавляйте `resolver` в `angie.conf`.** Встроенному ACME он нужен (без резолвера не
 > резолвится адрес УЦ, а `proxy_pass` — хосты по имени), НО панель эмитит свой
-> `resolver` (взятый из `/etc/resolv.conf`) в генерируемом `00-panel.conf`. Второй
+> `resolver` (`127.0.0.53` по умолчанию; override задаётся в Настройках) в генерируемом
+> `00-panel.conf`. `/etc/resolv.conf` автоматически не читается. Второй
 > `resolver` в `http {}` — дубликат, и `angie -t` при первом Apply падает с
 > `"resolver" directive is duplicate`. Резолвером на этом хосте владеет панель.
 >
@@ -218,11 +219,11 @@ verified live:
 2. **Install**: `apt-get install -y angie angie-console-light`. The build already ships
    `http_acme`, `http_v3`, and the full `stream` module set the panel relies on.
 3. **Tune**: the packaged `angie.conf` is already good (auto workers, 65536 conns,
-   sendfile, commented `stream {}` that the panel activates). Add a `resolver`
-   (`127.0.0.53`, needed for built-in ACME + hostname `proxy_pass`) plus
-   `server_tokens off`, `tcp_nopush/nodelay`, and global TLS session defaults inside
-   `http {}`. The panel manages `http.d/`/`stream.d/`, not `angie.conf`, so these edits
-   are safe. `angie -t && systemctl reload angie`.
+   sendfile, commented `stream {}` that the panel activates). Add `server_tokens off`,
+   `tcp_nopush/nodelay`, and global TLS session defaults inside `http {}`. Do not add a
+   `resolver` there when using the panel: it emits `127.0.0.53` by default, with an
+   optional override in Settings. For Angie without the panel, add a resolver such as
+   `127.0.0.53`. Then run `angie -t && systemctl reload angie`.
 4. **Verify**: `/status` returns 200, outbound to `acme-v02.api.letsencrypt.org` is
    reachable (HTTP/2 200), and the clock is NTP-synced (required for ACME).
 5. **Next**: install the Angie Panel `.deb` (arm64) — see `installation.md`.

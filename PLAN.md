@@ -188,7 +188,7 @@ apply_history id, timestamp(UTC epoch), db_revision, diff, result, report(JSON)
 
 ```
 /etc/angie/http.d/
-  00-panel.conf     # resolver <из /etc/resolv.conf | override из настроек>;
+  00-panel.conf     # resolver <127.0.0.53 по умолчанию | override из настроек>;
                     # proxy_cache_path ... keys_zone=assets:10m (для cache_assets);
                     # server 127.0.0.1:8100 { api /status/; api_config_files on; }
   05-default.conf   # default_server :80 и :443: ssl_reject_handshake on; (без dummy-сертов!)
@@ -425,9 +425,9 @@ openssl-sys/native-tls. SQLite: WAL, busy_timeout, synchronous=NORMAL, запи�
 - **Поведение `angie -t` от root при новом acme_client** (создание каталогов/ключей на этапе
   теста staging-конфига): проверить на M0 — не оставляет ли тест staging-валидации мусорный
   state; при необходимости — отдельный acme_client_path для staging-теста.
-- **resolver для acme_client** обязателен; из /etc/resolv.conf может прийти фильтрующий
-  локальный DNS → резолвинг ACME CA ломается. Настройка resolver_override (1.1.1.1/9.9.9.9)
-  видна в Settings.
+- **resolver для acme_client** обязателен; используется 127.0.0.53 по умолчанию.
+  Если локальный DNS фильтрует запросы, задаётся resolver_override (например, 1.1.1.1/9.9.9.9)
+  в Settings.
 - **Console Light рядом** (опция install.sh): чисто статический мониторинг, не конфликтует;
   наш /status-сервер на 8100 переиспользуется его location-блоком при желании.
 - **Апгрейды Angie**: сверять changelog (EAB появится — добавить в UI; поведение acme_http_port

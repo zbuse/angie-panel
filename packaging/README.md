@@ -20,7 +20,7 @@ Debian 12/13; RPM packages target x86_64 and aarch64 RPM-based distributions.
 
 Package dependencies (set manually in `Cargo.toml` / cargo-deb metadata —
 auto-detection is empty for a static musl binary):
-`angie (>= 1.11), dbus, polkitd`.
+`angie (>= 1.12), dbus, polkitd`.
 The RPM spec declares the equivalent dependencies (`angie`, `dbus`, `polkit`,
 `systemd`, `shadow-utils`, `bash`, and `curl`).
 

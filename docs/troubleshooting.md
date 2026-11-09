@@ -42,8 +42,9 @@ systemctl status angie-panel-apply.service
   либо порт 53 занят локальным резолвером (AdGuard/dnsmasq — типично на R4S).
 - **Часы сбиты** (у R4S нет RTC) — ACME/TLS падают загадочно. Проверьте:
   `timedatectl show -p NTPSynchronized`.
-- **resolver** не настроен — `acme_client` не может резолвить адрес CA. Панель берёт его из
-  `/etc/resolv.conf`; при фильтрующем локальном DNS задайте override в Настройках.
+- **resolver** не настроен — `acme_client` не может резолвить адрес CA. По умолчанию панель
+  использует `127.0.0.53`; если локальный DNS фильтрует запросы или недоступен, задайте
+  resolver override в Настройках.
 
 ### HTTPS не включается после выпуска
 
