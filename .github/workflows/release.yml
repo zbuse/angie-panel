@@ -146,6 +146,15 @@ jobs:
         working-directory: backend
         run: cargo deb --target ${{ matrix.target }} --no-build --no-strip
 
+      - name: Stage .deb package
+        run: |
+          mapfile -t debs < <(find backend/target -type f -name '*.deb' -print)
+          if [ ${#debs[@]} -eq 0 ]; then
+            echo "::error::cargo-deb did not produce a .deb package"
+            exit 1
+          fi
+          cp "${debs[@]}" .
+
       - name: Package .rpm (rpmbuild)
         env:
           RPM_ARCH: ${{ matrix.rpm_arch }}
@@ -183,7 +192,7 @@ jobs:
         with:
           name: deb-${{ matrix.target }}
           path: |
-            backend/target/debian/*.deb
+            *.deb
             angie-panel-*.rpm
           if-no-files-found: error
 
