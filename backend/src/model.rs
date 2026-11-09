@@ -343,9 +343,9 @@ const MAX_HEADER_VALUE_LEN: usize = 1024;
 
 /// Validate a host's custom headers. Each name is an HTTP token; each value is
 /// bounded printable ASCII with the characters that could terminate the quoted
-/// directive value or inject an nginx variable (`"`, `\`, `$`, control/CR-LF)
-/// rejected. An empty value is allowed — for a request header that strips the
-/// header from the upstream request.
+/// directive value (`"`, `\`, control/CR-LF) rejected. Request-header values
+/// may interpolate simple nginx variables (`$remote_addr`); response values may
+/// not. An empty value is allowed — for a request header that strips it.
 pub fn validate_custom_headers(headers: Vec<CustomHeader>) -> Result<Vec<CustomHeader>, ApiError> {
     if headers.len() > MAX_CUSTOM_HEADERS {
         return Err(bad("invalid_header", "too many custom headers"));
@@ -353,7 +353,7 @@ pub fn validate_custom_headers(headers: Vec<CustomHeader>) -> Result<Vec<CustomH
     let mut out = Vec::with_capacity(headers.len());
     for h in headers {
         let name = validate_header_name(&h.name, "invalid_header")?;
-        let value = validate_header_value(&h.value)?;
+        let value = validate_header_value(&h.value, h.direction == HeaderDirection::Request)?;
         out.push(CustomHeader {
             name,
             value,
@@ -363,19 +363,38 @@ pub fn validate_custom_headers(headers: Vec<CustomHeader>) -> Result<Vec<CustomH
     Ok(out)
 }
 
-fn validate_header_value(raw: &str) -> Result<String, ApiError> {
+fn validate_header_value(raw: &str, allow_variables: bool) -> Result<String, ApiError> {
+    if !raw.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+        return Err(bad("invalid_header", "header value contains control characters"));
+    }
     let s = raw.trim();
     if s.len() > MAX_HEADER_VALUE_LEN {
         return Err(bad("invalid_header", "header value is too long"));
     }
-    let ok = s
-        .bytes()
-        .all(|b| (0x20..=0x7e).contains(&b) && !matches!(b, b'"' | b'\\' | b'$'));
-    if !ok {
-        return Err(bad(
-            "invalid_header",
-            "header value contains invalid characters (no quotes, backslash, $, or control characters)",
-        ));
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !(0x20..=0x7e).contains(&b) || matches!(b, b'"' | b'\\') {
+            return Err(bad(
+                "invalid_header",
+                "header value contains invalid characters (no quotes, backslash, or control characters)",
+            ));
+        }
+        if b == b'$' {
+            if !allow_variables
+                || i + 1 == bytes.len()
+                || !(bytes[i + 1].is_ascii_alphanumeric() || bytes[i + 1] == b'_')
+            {
+                return Err(bad("invalid_header", "invalid nginx variable in header value"));
+            }
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
     }
     Ok(s.to_string())
 }
@@ -716,6 +735,112 @@ pub struct Upstream {
     pub fail_timeout_secs: u32,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct UpstreamPool {
+    pub id: i64,
+    pub name: String,
+    pub scheme: Scheme,
+    pub primary_host: String,
+    pub primary_port: u16,
+    pub upstream: Upstream,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpstreamPoolInput {
+    pub name: String,
+    pub scheme: Scheme,
+    pub primary_host: String,
+    pub primary_port: u16,
+    #[serde(default)]
+    pub upstream: Upstream,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostTemplateKind {
+    Http,
+    Stream,
+}
+
+impl HostTemplateKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Stream => "stream",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostTemplate {
+    pub id: i64,
+    pub kind: HostTemplateKind,
+    pub name: String,
+    pub value: serde_json::Value,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HostTemplateInput {
+    pub name: String,
+    pub value: serde_json::Value,
+}
+
+pub const MAX_HOST_TEMPLATE_NAME_LEN: usize = 64;
+pub const MAX_HOST_TEMPLATE_VALUE_BYTES: usize = 16 * 1024;
+
+pub fn validate_host_template_input(
+    mut input: HostTemplateInput,
+) -> Result<HostTemplateInput, ApiError> {
+    input.name = input.name.trim().to_string();
+    if input.name.is_empty()
+        || input.name.chars().count() > MAX_HOST_TEMPLATE_NAME_LEN
+        || input.name.chars().any(char::is_control)
+    {
+        return Err(bad(
+            "invalid_host_template",
+            format!("template name must be 1-{MAX_HOST_TEMPLATE_NAME_LEN} characters without control characters"),
+        ));
+    }
+    if !input.value.is_object() {
+        return Err(bad(
+            "invalid_host_template",
+            "template value must be a JSON object",
+        ));
+    }
+    let encoded = serde_json::to_vec(&input.value)
+        .map_err(|_| bad("invalid_host_template", "template value is not valid JSON"))?;
+    if encoded.len() > MAX_HOST_TEMPLATE_VALUE_BYTES {
+        return Err(bad(
+            "invalid_host_template",
+            format!("template value must be at most {MAX_HOST_TEMPLATE_VALUE_BYTES} bytes"),
+        ));
+    }
+    Ok(input)
+}
+
+pub fn validate_upstream_pool_input(
+    mut input: UpstreamPoolInput,
+    policy: &UpstreamPolicy,
+) -> Result<UpstreamPoolInput, ApiError> {
+    input.name = input.name.trim().to_string();
+    if input.name.is_empty()
+        || input.name.len() > 64
+        || !input.name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'-' | b'_' | b'.'))
+    {
+        return Err(bad("invalid_upstream_pool", "pool name must be 1-64 safe ASCII characters"));
+    }
+    input.primary_host = validate_forward_host(&input.primary_host, policy)?;
+    if input.primary_port == 0 {
+        return Err(bad("invalid_upstream_pool", "primary port must be 1-65535"));
+    }
+    input.upstream = validate_upstream(input.upstream, policy)?;
+    Ok(input)
+}
+
 // Manual Default so `Upstream::default()` matches the serde field defaults
 // (a plain single-server host with Angie's own max_fails=1 / fail_timeout=10s),
 // NOT the all-zero derive which would emit `weight=0 max_fails=0`.
@@ -829,6 +954,7 @@ pub struct ProxyHost {
     pub trust_forwarded_proto: bool,
     pub certificate_id: Option<i64>,
     pub access_list_id: Option<i64>,
+    pub upstream_pool_id: Option<i64>,
     pub locations: Vec<CustomLocation>,
     pub advanced_snippet: Option<String>,
     pub rate_limit: RateLimit,
@@ -938,6 +1064,8 @@ pub struct ProxyHostInput {
     pub certificate_id: Option<i64>,
     #[serde(default)]
     pub access_list_id: Option<i64>,
+    #[serde(default)]
+    pub upstream_pool_id: Option<i64>,
     #[serde(default)]
     pub locations: Vec<CustomLocation>,
     #[serde(default)]
@@ -2588,6 +2716,7 @@ mod tests {
             trust_forwarded_proto: false,
             certificate_id: None,
             access_list_id: None,
+            upstream_pool_id: None,
             locations: vec![],
             advanced_snippet: Some("client_max_body_size 100m;".into()),
             rate_limit: RateLimit::default(),
@@ -2818,7 +2947,6 @@ mod tests {
             ("X Frame", "ok"),
             ("X-Evil", "a\"; add_header Evil 1"),
             ("X-Evil", "back\\slash"),
-            ("X-Var", "$request_uri"),
             ("X-Nl", "line1\nline2"),
         ] {
             assert!(
@@ -2831,6 +2959,28 @@ mod tests {
                 "should reject ({name:?}, {value:?})"
             );
         }
+        for value in ["$remote_addr", "client=$http_x_forwarded_for"] {
+            assert!(validate_custom_headers(vec![CustomHeader {
+                name: "X-Client".into(),
+                value: value.into(),
+                direction: HeaderDirection::Request,
+            }])
+            .is_ok());
+        }
+        for value in ["$", "$-bad", "${bad}", "bad\r\nInjected: yes", "\r\nok"] {
+            assert!(validate_custom_headers(vec![CustomHeader {
+                name: "X-Client".into(),
+                value: value.into(),
+                direction: HeaderDirection::Request,
+            }])
+            .is_err());
+        }
+        assert!(validate_custom_headers(vec![CustomHeader {
+            name: "X-Response".into(),
+            value: "$remote_addr".into(),
+            direction: HeaderDirection::Response,
+        }])
+        .is_err());
     }
 
     #[test]
@@ -3079,6 +3229,63 @@ mod tests {
             &policy(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn host_template_validation_restricts_name_type_and_size() {
+        let valid = HostTemplateInput {
+            name: "  standard proxy  ".into(),
+            value: serde_json::json!({"websockets_upgrade": false}),
+        };
+        let validated = validate_host_template_input(valid).unwrap();
+        assert_eq!(validated.name, "standard proxy");
+
+        let too_long = "x".repeat(MAX_HOST_TEMPLATE_NAME_LEN + 1);
+        for name in ["", "bad\nname", too_long.as_str()] {
+            assert!(validate_host_template_input(HostTemplateInput {
+                name: name.into(),
+                value: serde_json::json!({}),
+            })
+            .is_err());
+        }
+        assert!(validate_host_template_input(HostTemplateInput {
+            name: "array".into(),
+            value: serde_json::json!([]),
+        })
+        .is_err());
+        assert!(validate_host_template_input(HostTemplateInput {
+            name: "large".into(),
+            value: serde_json::json!({"content": "x".repeat(MAX_HOST_TEMPLATE_VALUE_BYTES)}),
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn shared_upstream_pool_validation_rejects_bad_names_and_hosts() {
+        let valid = UpstreamPoolInput {
+            name: "production api".into(),
+            scheme: Scheme::Https,
+            primary_host: "10.0.0.10".into(),
+            primary_port: 8443,
+            upstream: Upstream::default(),
+        };
+        assert_eq!(
+            validate_upstream_pool_input(valid, &policy()).unwrap().primary_host,
+            "10.0.0.10"
+        );
+        for name in ["".to_string(), "bad; }".to_string(), "x".repeat(65)] {
+            assert!(validate_upstream_pool_input(
+                UpstreamPoolInput {
+                    name,
+                    scheme: Scheme::Http,
+                    primary_host: "10.0.0.10".into(),
+                    primary_port: 80,
+                    upstream: Upstream::default(),
+                },
+                &policy(),
+            )
+            .is_err());
+        }
     }
 
     #[test]

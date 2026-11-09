@@ -59,6 +59,7 @@ import {
   type DnsCredentialProfile,
 } from '@/lib/api'
 import { isValidDomain } from '@/lib/domain'
+import { runSequentially } from '@/lib/bulk-actions'
 import { toast } from '@/lib/toast'
 
 /** Create a fresh cert, or edit an existing one, through the same wizard. */
@@ -66,13 +67,51 @@ type WizardTarget = { mode: 'create' } | { mode: 'edit'; cert: Cert }
 
 export function CertificatesPage() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [wizard, setWizard] = useState<WizardTarget | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Cert | null>(null)
+  const [selected, setSelected] = useState<Set<number>>(() => new Set())
+  const [bulkRunning, setBulkRunning] = useState(false)
 
   const certsQuery = useQuery({
     queryKey: ['certificates'],
     queryFn: () => api.listCertificates(),
   })
+  const visibleIds = new Set((certsQuery.data?.certificates ?? []).map((cert) => cert.id))
+  const selectedIds = [...selected].filter((id) => visibleIds.has(id))
+  const deleteSelected = async () => {
+    if (bulkRunning) return
+    if (!window.confirm(t('certificates.bulk.confirmDelete', { count: selectedIds.length }))) return
+    setBulkRunning(true)
+    try {
+      const { failed } = await runSequentially(selectedIds, (id) => api.deleteCertificate(id))
+      const failedIds = failed.map(({ value }) => value)
+      setSelected(new Set(failedIds))
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['certificates'] }),
+        queryClient.invalidateQueries({ queryKey: ['hosts'] }),
+      ])
+      if (failedIds.length > 0) {
+        toast({
+          variant: 'destructive',
+          title: t('certificates.bulk.partialFailure', { failed: failedIds.length, total: selectedIds.length }),
+          description: failed[0].error instanceof ApiError
+            ? failed[0].error.message
+            : t('common.error'),
+        })
+      } else {
+        toast({ title: t('certificates.bulk.deleted') })
+      }
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: t('certificates.actionFailed'),
+        description: error instanceof ApiError ? error.message : t('common.error'),
+      })
+    } finally {
+      setBulkRunning(false)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -80,11 +119,30 @@ export function CertificatesPage() {
         <h1 className="text-2xl font-semibold tracking-tight">
           {t('certificates.title')}
         </h1>
-        <Button onClick={() => setWizard({ mode: 'create' })}>
+        <Button onClick={() => setWizard({ mode: 'create' })} disabled={bulkRunning}>
           <Plus aria-hidden="true" />
           {t('certificates.add')}
         </Button>
       </div>
+      {certsQuery.data && certsQuery.data.certificates.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label={t('certificates.bulk.selectAll')}
+              checked={selectedIds.length > 0 && selectedIds.length === certsQuery.data.certificates.length}
+              disabled={bulkRunning}
+              onChange={(event) => setSelected(event.target.checked
+                ? new Set(certsQuery.data.certificates.map((cert) => cert.id))
+                : new Set())}
+            />
+            {t('certificates.bulk.selected', { count: selectedIds.length })}
+          </label>
+          <Button size="sm" variant="destructive" disabled={!selectedIds.length || bulkRunning} onClick={() => void deleteSelected()}>
+            {t('certificates.actions.delete')}
+          </Button>
+        </div>
+      )}
 
       <Alert variant="info">
         <Info aria-hidden="true" />
@@ -120,6 +178,7 @@ export function CertificatesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead><span className="sr-only">{t('certificates.bulk.selectAll')}</span></TableHead>
                   <TableHead>{t('certificates.table.domains')}</TableHead>
                   <TableHead>{t('certificates.table.challenge')}</TableHead>
                   <TableHead>{t('certificates.table.keyType')}</TableHead>
@@ -136,6 +195,14 @@ export function CertificatesPage() {
                   <CertRow
                     key={cert.id}
                     cert={cert}
+                    selected={selected.has(cert.id)}
+                    disabled={bulkRunning}
+                    onSelect={(checked) => setSelected((previous) => {
+                      const next = new Set(previous)
+                      if (checked) next.add(cert.id)
+                      else next.delete(cert.id)
+                      return next
+                    })}
                     onEdit={() => setWizard({ mode: 'edit', cert })}
                     onDelete={() => setDeleteTarget(cert)}
                   />
@@ -168,11 +235,14 @@ export function CertificatesPage() {
 
 interface CertRowProps {
   cert: Cert
+  selected: boolean
+  disabled: boolean
+  onSelect: (checked: boolean) => void
   onEdit: () => void
   onDelete: () => void
 }
 
-function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
+function CertRow({ cert, selected, disabled, onSelect, onEdit, onDelete }: CertRowProps) {
   const { t, i18n } = useTranslation()
   const casQuery = useQuery({
     queryKey: ['acme-cas'],
@@ -186,6 +256,15 @@ function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
 
   return (
     <TableRow>
+      <TableCell>
+        <input
+          type="checkbox"
+          aria-label={t('certificates.bulk.selectCert', { domain: cert.domains[0] ?? '' })}
+          checked={selected}
+          disabled={disabled}
+          onChange={(event) => onSelect(event.target.checked)}
+        />
+      </TableCell>
       <TableCell>
         <DomainBadges domains={cert.domains} secure />
       </TableCell>
@@ -221,17 +300,18 @@ function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
             <Button
               variant="ghost"
               size="icon-sm"
+              disabled={disabled}
               aria-label={t('certificates.table.actions')}
             >
               <MoreHorizontal aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={onEdit}>
+            <DropdownMenuItem disabled={disabled} onSelect={onEdit}>
               {t('certificates.actions.edit')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+            <DropdownMenuItem variant="destructive" disabled={disabled} onSelect={onDelete}>
               {t('certificates.actions.delete')}
             </DropdownMenuItem>
           </DropdownMenuContent>

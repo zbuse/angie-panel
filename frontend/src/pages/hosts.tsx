@@ -25,13 +25,17 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { api, ApiError, type Cert, type Host } from '@/lib/api'
+import { runSequentially } from '@/lib/bulk-actions'
 import { toast } from '@/lib/toast'
 
 export function HostsPage() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<Host | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Host | null>(null)
+  const [selected, setSelected] = useState<Set<number>>(() => new Set())
+  const [bulkRunning, setBulkRunning] = useState(false)
 
   const hostsQuery = useQuery({
     queryKey: ['hosts'],
@@ -58,10 +62,49 @@ export function HostsPage() {
       return sortAsc ? cmp : -cmp
     })
   }, [hostsQuery.data?.hosts, sortAsc])
+  const visibleIds = new Set((hostsQuery.data?.hosts ?? []).map((host) => host.id))
+  const visibleSelectedIds = [...selected].filter((id) => visibleIds.has(id))
 
   const certsById = new Map(
     (certsQuery.data?.certificates ?? []).map((cert) => [cert.id, cert]),
   )
+  const selectedIds = visibleSelectedIds
+  const runBulk = async (action: 'enable' | 'disable' | 'delete') => {
+    if (action === 'delete' && !window.confirm(t('hosts.bulk.confirmDelete', { count: selectedIds.length }))) {
+      return
+    }
+    if (bulkRunning) return
+    setBulkRunning(true)
+    try {
+      const { failed } = await runSequentially(selectedIds, (id) =>
+        action === 'enable' ? api.enableHost(id)
+          : action === 'disable' ? api.disableHost(id)
+            : api.deleteHost(id),
+      )
+      const failedIds = failed.map(({ value }) => value)
+      setSelected(new Set(failedIds))
+      await queryClient.invalidateQueries({ queryKey: ['hosts'] })
+      if (failedIds.length > 0) {
+        toast({
+          variant: 'destructive',
+          title: t('hosts.bulk.partialFailure', { failed: failedIds.length, total: selectedIds.length }),
+          description: failed[0].error instanceof ApiError
+            ? failed[0].error.message
+            : t('common.error'),
+        })
+      } else {
+        toast({ title: t('hosts.unappliedTitle'), description: t('hosts.unappliedBody') })
+      }
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: t('hosts.actionFailed'),
+        description: error instanceof ApiError ? error.message : t('common.error'),
+      })
+    } finally {
+      setBulkRunning(false)
+    }
+  }
 
   const openCreate = () => {
     setEditing(null)
@@ -77,7 +120,7 @@ export function HostsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">{t('hosts.title')}</h1>
-        <Button onClick={openCreate}>
+        <Button onClick={openCreate} disabled={bulkRunning}>
           <Plus aria-hidden="true" />
           {t('hosts.add')}
         </Button>
@@ -126,12 +169,43 @@ export function HostsPage() {
               )}
             </Button>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                aria-label={t('hosts.bulk.selectAll')}
+                checked={visibleSelectedIds.length > 0 && visibleSelectedIds.length === sortedHosts.length}
+                disabled={bulkRunning}
+                onChange={(event) => setSelected(event.target.checked
+                  ? new Set(sortedHosts.map((host) => host.id))
+                  : new Set())}
+              />
+              {t('hosts.bulk.selected', { count: visibleSelectedIds.length })}
+            </label>
+            <Button size="sm" variant="outline" disabled={!visibleSelectedIds.length || bulkRunning} onClick={() => void runBulk('enable')}>
+              {t('hosts.actions.enable')}
+            </Button>
+            <Button size="sm" variant="outline" disabled={!visibleSelectedIds.length || bulkRunning} onClick={() => void runBulk('disable')}>
+              {t('hosts.actions.disable')}
+            </Button>
+            <Button size="sm" variant="destructive" disabled={!visibleSelectedIds.length || bulkRunning} onClick={() => void runBulk('delete')}>
+              {t('hosts.actions.delete')}
+            </Button>
+          </div>
           <Card className="p-0">
             <CardContent className="divide-y p-0">
               {sortedHosts.map((host) => (
                   <HostRow
                     key={host.id}
                     host={host}
+                    bulkRunning={bulkRunning}
+                    selected={selected.has(host.id)}
+                    onSelect={(checked) => setSelected((previous) => {
+                      const next = new Set(previous)
+                      if (checked) next.add(host.id)
+                      else next.delete(host.id)
+                      return next
+                    })}
                     cert={
                       host.certificate_id != null
                         ? certsById.get(host.certificate_id)
@@ -161,12 +235,15 @@ export function HostsPage() {
 
 interface HostRowProps {
   host: Host
+  bulkRunning: boolean
+  selected: boolean
+  onSelect: (checked: boolean) => void
   cert: Cert | undefined
   onEdit: () => void
   onDelete: () => void
 }
 
-function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
+function HostRow({ host, cert, selected, bulkRunning, onSelect, onEdit, onDelete }: HostRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -197,14 +274,23 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
     <div className="space-y-2 p-4">
       {/* Line 1: the domains, and the actions menu pinned right. */}
       <div className="flex items-start justify-between gap-2">
-        <DomainBadges domains={host.domains} secure={cert !== undefined} />
+        <div className="flex min-w-0 items-start gap-3">
+          <input
+            type="checkbox"
+            aria-label={t('hosts.bulk.selectHost', { domain: host.domains[0] ?? '' })}
+            checked={selected}
+            disabled={bulkRunning}
+            onChange={(event) => onSelect(event.target.checked)}
+          />
+          <DomainBadges domains={host.domains} secure={cert !== undefined} />
+        </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               size="icon-sm"
               className="-mt-1 shrink-0"
-              disabled={toggleMutation.isPending}
+              disabled={toggleMutation.isPending || bulkRunning}
               aria-label={t('hosts.table.actions')}
             >
               {toggleMutation.isPending ? (
@@ -215,14 +301,14 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={onEdit}>
+            <DropdownMenuItem disabled={bulkRunning} onSelect={onEdit}>
               {t('hosts.actions.edit')}
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => toggleMutation.mutate()}>
+            <DropdownMenuItem disabled={bulkRunning} onSelect={() => toggleMutation.mutate()}>
               {host.enabled ? t('hosts.actions.disable') : t('hosts.actions.enable')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+            <DropdownMenuItem variant="destructive" disabled={bulkRunning} onSelect={onDelete}>
               {t('hosts.actions.delete')}
             </DropdownMenuItem>
           </DropdownMenuContent>

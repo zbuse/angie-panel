@@ -10,7 +10,7 @@ use crate::model::{
     BalanceMethod, CustomHeader, CustomLocation, DeadHost, ErrorPage, ErrorPages, ForwardAuth,
     GeoMode, GeoPolicy, Gzip, HeaderDirection, Maintenance, Mtls, ProxyHost, ProxyTuning,
     RateLimit, RedirectHost, RedirectScheme, Scheme, SniRoute, SniRouter, Stream, StreamTls,
-    Upstream, UpstreamServer,
+    Upstream, UpstreamPool, UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -54,6 +54,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         trust_forwarded_proto: false,
         certificate_id: None,
         access_list_id: None,
+        upstream_pool_id: None,
         locations: vec![],
         advanced_snippet: None,
         rate_limit: RateLimit::default(),
@@ -88,6 +89,7 @@ fn input_acl(
 ) -> GeneratorInput {
     GeneratorInput {
         hosts,
+        upstream_pools: vec![],
         settings,
         snippets_dir: snippets_dir(),
         status_port: 8100,
@@ -400,6 +402,30 @@ fn golden_host_load_balanced() {
     .unwrap();
     let (_, body) = only_host_file(&files);
     assert_golden("20-host-load-balanced.conf", body);
+}
+
+#[test]
+fn shared_upstream_pool_is_emitted_once_and_referenced_by_hosts() {
+    let mut host = base_host(1, "shared.example.com");
+    host.upstream_pool_id = Some(7);
+    let mut gi = input(vec![host], vec![], settings(DefaultSite::NotFound, false));
+    gi.upstream_pools.push(UpstreamPool {
+        id: 7,
+        name: "shared".into(),
+        scheme: Scheme::Https,
+        primary_host: "10.0.0.10".into(),
+        primary_port: 8443,
+        upstream: Upstream::default(),
+        created_at: 1,
+        updated_at: 1,
+    });
+
+    let files = generate(&gi).unwrap();
+    assert!(files["18-upstream-pools.conf"].contains("upstream shared_pool_7"));
+    assert!(files["18-upstream-pools.conf"].contains("server 10.0.0.10:8443;"));
+    assert!(files["20-host-1-shared-example-com.conf"]
+        .contains("proxy_pass https://shared_pool_7;"));
+    assert!(!files["20-host-1-shared-example-com.conf"].contains("upstream host_1"));
 }
 
 #[test]
@@ -814,6 +840,62 @@ fn golden_forward_auth() {
 }
 
 #[test]
+fn forward_auth_identity_headers_restore_the_full_proxy_header_set_per_location() {
+    let mut host = base_host(140, "auth.example.com");
+    host.websockets_upgrade = true;
+    host.trust_forwarded_proto = true;
+    host.forward_auth = ForwardAuth {
+        enabled: true,
+        verify_url: "http://10.0.0.9:9091/api/verify".into(),
+        sign_in_url: None,
+        copy_headers: vec!["Remote-User".into()],
+    };
+    host.custom_headers = vec![CustomHeader {
+        name: "X-Tenant".into(),
+        value: "shared".into(),
+        direction: HeaderDirection::Request,
+    }];
+    host.locations = vec![CustomLocation {
+        path: "/api".into(),
+        forward_scheme: Scheme::Http,
+        forward_host: "10.0.0.10".into(),
+        forward_port: 8080,
+        rewrite: None,
+        snippet: None,
+    }];
+
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+
+    for path in ["/", "/api"] {
+        let marker = format!("    location {path} {{");
+        let start = body.find(&marker).unwrap();
+        let block = body[start..].split_once("    }\n").unwrap().0;
+        for header in [
+            "proxy_set_header Host $host;",
+            "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+            "proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;",
+            "proxy_set_header Upgrade $http_upgrade;",
+            "proxy_set_header Connection $connection_upgrade;",
+            "proxy_set_header X-Tenant \"shared\";",
+            "proxy_set_header Remote-User $fa_0;",
+        ] {
+            assert!(block.contains(header), "{path} is missing {header}:\n{block}");
+        }
+        assert!(
+            block.find("proxy_set_header X-Tenant").unwrap()
+                < block.find("proxy_set_header Remote-User").unwrap(),
+            "auth identity headers must override the restored header set"
+        );
+    }
+}
+
+#[test]
 fn golden_gzip() {
     // gzip on + gzip_proxied any (so proxied responses compress) + tuning +
     // a custom type list. Verified by angie -t (and a live gzipped response)
@@ -1034,7 +1116,7 @@ fn geo_allow_defaults_inverted_and_inert_without_cidrs() {
 #[test]
 fn golden_custom_headers() {
     // Response headers → add_header at server scope; request headers →
-    // proxy_set_header inside the location, after the standard ones. Verified
+    // proxy_set_header at server scope, shared by every proxy location. Verified
     // by angie -t on real Angie.
     let mut host = base_host(16, "app.example.com");
     host.custom_headers = vec![
@@ -1051,6 +1133,11 @@ fn golden_custom_headers() {
         CustomHeader {
             name: "X-Tenant".into(),
             value: "acme-corp".into(),
+            direction: HeaderDirection::Request,
+        },
+        CustomHeader {
+            name: "CF-Connecting-IP".into(),
+            value: "$remote_addr".into(),
             direction: HeaderDirection::Request,
         },
     ];

@@ -8,8 +8,9 @@ use sqlx::SqlitePool;
 use crate::db::now_epoch;
 use crate::model::{
     Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, DnsCredential,
-    DnsCredentialInput, ErrorPages, ForwardAuth, Gzip, HealthCheck, KeyType, Maintenance, Mtls,
-    ProxyHost, ProxyHostInput, ProxyTuning, RateLimit, Scheme, Upstream,
+    DnsCredentialInput, ErrorPages, ForwardAuth, Gzip, HealthCheck, HostTemplate,
+    HostTemplateInput, HostTemplateKind, KeyType, Maintenance, Mtls, ProxyHost, ProxyHostInput,
+    ProxyTuning, RateLimit, Scheme, Upstream, UpstreamPool, UpstreamPoolInput,
 };
 
 // ------------------------------------------------------------------- rows
@@ -32,6 +33,7 @@ struct HostRow {
     trust_forwarded_proto: i64,
     certificate_id: Option<i64>,
     access_list_id: Option<i64>,
+    upstream_pool_id: Option<i64>,
     locations: String,
     advanced_snippet: Option<String>,
     rate_limit: Option<String>,
@@ -47,6 +49,33 @@ struct HostRow {
     enabled: i64,
     created_at: i64,
     updated_at: i64,
+}
+
+#[derive(sqlx::FromRow)]
+struct UpstreamPoolRow {
+    id: i64,
+    name: String,
+    scheme: String,
+    primary_host: String,
+    primary_port: i64,
+    upstream: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl UpstreamPoolRow {
+    fn into_model(self) -> anyhow::Result<UpstreamPool> {
+        Ok(UpstreamPool {
+            id: self.id,
+            name: self.name,
+            scheme: scheme_from_str(&self.scheme),
+            primary_host: self.primary_host,
+            primary_port: self.primary_port as u16,
+            upstream: upstream_from_json(self.upstream.as_deref())?,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
+    }
 }
 
 fn scheme_from_str(s: &str) -> Scheme {
@@ -75,6 +104,7 @@ impl HostRow {
             trust_forwarded_proto: self.trust_forwarded_proto != 0,
             certificate_id: self.certificate_id,
             access_list_id: self.access_list_id,
+            upstream_pool_id: self.upstream_pool_id,
             locations: serde_json::from_str(&self.locations).context("locations json")?,
             advanced_snippet: self.advanced_snippet,
             rate_limit: rate_limit_from_json(self.rate_limit.as_deref())?,
@@ -222,7 +252,7 @@ fn error_pages_from_json(raw: Option<&str>) -> anyhow::Result<ErrorPages> {
 
 const HOST_COLUMNS: &str = "id, domains, forward_scheme, forward_host, forward_port, \
      websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
-     hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
+     hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, upstream_pool_id, locations, \
      advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, maintenance, \
      gzip, error_pages, proxy_tuning, health_checks, enabled, created_at, updated_at";
 
@@ -261,10 +291,10 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO proxy_hosts (domains, forward_scheme, forward_host, forward_port, \
          websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
-         hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
+         hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, upstream_pool_id, locations, \
          advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, maintenance, \
          gzip, error_pages, proxy_tuning, health_checks, enabled, created_at, updated_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -281,6 +311,7 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     .bind(input.trust_forwarded_proto as i64)
     .bind(input.certificate_id)
     .bind(input.access_list_id)
+    .bind(input.upstream_pool_id)
     .bind(locations_json(&input.locations))
     .bind(input.advanced_snippet.as_deref())
     .bind(rate_limit_json(&input.rate_limit))
@@ -306,7 +337,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
     let rows = sqlx::query(
         "UPDATE proxy_hosts SET domains=?, forward_scheme=?, forward_host=?, forward_port=?, \
          websockets_upgrade=?, block_exploits=?, cache_assets=?, http2=?, http3=?, force_ssl=?, hsts=?, \
-         hsts_subdomains=?, trust_forwarded_proto=?, certificate_id=?, access_list_id=?, \
+         hsts_subdomains=?, trust_forwarded_proto=?, certificate_id=?, access_list_id=?, upstream_pool_id=?, \
          locations=?, advanced_snippet=?, rate_limit=?, upstream=?, mtls=?, forward_auth=?, \
          custom_headers=?, maintenance=?, gzip=?, error_pages=?, proxy_tuning=?, health_checks=?, enabled=?, \
          updated_at=? WHERE id=?",
@@ -326,6 +357,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
     .bind(input.trust_forwarded_proto as i64)
     .bind(input.certificate_id)
     .bind(input.access_list_id)
+    .bind(input.upstream_pool_id)
     .bind(locations_json(&input.locations))
     .bind(input.advanced_snippet.as_deref())
     .bind(rate_limit_json(&input.rate_limit))
@@ -373,11 +405,214 @@ pub async fn hosts_revision(db: &SqlitePool) -> anyhow::Result<i64> {
          UNION ALL SELECT MAX(updated_at) FROM dead_hosts \
          UNION ALL SELECT MAX(updated_at) FROM streams \
          UNION ALL SELECT MAX(updated_at) FROM sni_routers \
+         UNION ALL SELECT MAX(updated_at) FROM upstream_pools \
          UNION ALL SELECT MAX(created_at) FROM bans)",
     )
     .fetch_one(db)
     .await?;
     Ok(rev.unwrap_or(0))
+}
+
+// --------------------------------------------------------- shared upstreams
+
+pub async fn list_upstream_pools(db: &SqlitePool) -> anyhow::Result<Vec<UpstreamPool>> {
+    let rows = sqlx::query_as::<_, UpstreamPoolRow>(
+        "SELECT id, name, scheme, primary_host, primary_port, upstream, created_at, updated_at \
+         FROM upstream_pools ORDER BY name COLLATE NOCASE, id",
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(UpstreamPoolRow::into_model).collect()
+}
+
+pub async fn get_upstream_pool(
+    db: &SqlitePool,
+    id: i64,
+) -> anyhow::Result<Option<UpstreamPool>> {
+    let row = sqlx::query_as::<_, UpstreamPoolRow>(
+        "SELECT id, name, scheme, primary_host, primary_port, upstream, created_at, updated_at \
+         FROM upstream_pools WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    row.map(UpstreamPoolRow::into_model).transpose()
+}
+
+pub async fn insert_upstream_pool(
+    db: &SqlitePool,
+    input: &UpstreamPoolInput,
+) -> anyhow::Result<i64> {
+    let now = now_epoch();
+    Ok(sqlx::query_scalar(
+        "INSERT INTO upstream_pools (name, scheme, primary_host, primary_port, upstream, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(&input.name)
+    .bind(input.scheme.as_str())
+    .bind(&input.primary_host)
+    .bind(input.primary_port as i64)
+    .bind(upstream_json(&input.upstream))
+    .bind(now)
+    .bind(now)
+    .fetch_one(db)
+    .await?)
+}
+
+pub async fn update_upstream_pool(
+    db: &SqlitePool,
+    id: i64,
+    input: &UpstreamPoolInput,
+) -> anyhow::Result<bool> {
+    let updated_at = now_epoch();
+    let mut tx = db.begin().await?;
+    let result = sqlx::query(
+        "UPDATE upstream_pools SET name=?, scheme=?, primary_host=?, primary_port=?, upstream=?, updated_at=? WHERE id=?",
+    )
+    .bind(&input.name)
+    .bind(input.scheme.as_str())
+    .bind(&input.primary_host)
+    .bind(input.primary_port as i64)
+    .bind(upstream_json(&input.upstream))
+    .bind(updated_at)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(false);
+    }
+
+    sqlx::query(
+        "UPDATE proxy_hosts SET forward_scheme=?, forward_host=?, forward_port=?, upstream=?, updated_at=? \
+         WHERE upstream_pool_id=?",
+    )
+    .bind(input.scheme.as_str())
+    .bind(&input.primary_host)
+    .bind(input.primary_port as i64)
+    .bind(upstream_json(&input.upstream))
+    .bind(updated_at)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+pub async fn delete_upstream_pool(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let result = sqlx::query("DELETE FROM upstream_pools WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn upstream_pool_host_count(db: &SqlitePool, id: i64) -> anyhow::Result<i64> {
+    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM proxy_hosts WHERE upstream_pool_id = ?")
+        .bind(id)
+        .fetch_one(db)
+        .await?)
+}
+
+// -------------------------------------------------------------- host templates
+
+#[derive(sqlx::FromRow)]
+struct HostTemplateRow {
+    id: i64,
+    kind: String,
+    name: String,
+    value: String,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl HostTemplateRow {
+    fn into_model(self) -> anyhow::Result<HostTemplate> {
+        Ok(HostTemplate {
+            id: self.id,
+            kind: serde_json::from_value(serde_json::Value::String(self.kind))
+                .context("host template kind")?,
+            name: self.name,
+            value: serde_json::from_str(&self.value).context("host template value json")?,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
+    }
+}
+
+pub async fn list_host_templates(
+    db: &SqlitePool,
+    kind: HostTemplateKind,
+) -> anyhow::Result<Vec<HostTemplate>> {
+    let rows = sqlx::query_as::<_, HostTemplateRow>(
+        "SELECT id, kind, name, value, created_at, updated_at FROM host_templates \
+         WHERE kind = ? ORDER BY name COLLATE NOCASE, id",
+    )
+    .bind(kind.as_str())
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(HostTemplateRow::into_model).collect()
+}
+
+pub async fn get_host_template(db: &SqlitePool, id: i64) -> anyhow::Result<Option<HostTemplate>> {
+    let row = sqlx::query_as::<_, HostTemplateRow>(
+        "SELECT id, kind, name, value, created_at, updated_at FROM host_templates WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    row.map(HostTemplateRow::into_model).transpose()
+}
+
+pub async fn insert_host_template(
+    db: &SqlitePool,
+    kind: HostTemplateKind,
+    input: &HostTemplateInput,
+) -> anyhow::Result<i64> {
+    let now = now_epoch();
+    Ok(sqlx::query_scalar(
+        "INSERT INTO host_templates (kind, name, value, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(kind.as_str())
+    .bind(&input.name)
+    .bind(serde_json::to_string(&input.value)?)
+    .bind(now)
+    .bind(now)
+    .fetch_one(db)
+    .await?)
+}
+
+pub async fn update_host_template(
+    db: &SqlitePool,
+    kind: HostTemplateKind,
+    id: i64,
+    input: &HostTemplateInput,
+) -> anyhow::Result<bool> {
+    let result = sqlx::query(
+        "UPDATE host_templates SET name = ?, value = ?, updated_at = ? WHERE kind = ? AND id = ?",
+    )
+    .bind(&input.name)
+    .bind(serde_json::to_string(&input.value)?)
+    .bind(now_epoch())
+    .bind(kind.as_str())
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn delete_host_template(
+    db: &SqlitePool,
+    kind: HostTemplateKind,
+    id: i64,
+) -> anyhow::Result<bool> {
+    let result = sqlx::query("DELETE FROM host_templates WHERE kind = ? AND id = ?")
+        .bind(kind.as_str())
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 // ------------------------------------------------- redirect / dead hosts
@@ -1197,6 +1432,7 @@ pub async fn import_replace(
     certs: &[(i64, CertificateInput)],
     access_lists: &[AclImportRow],
     hosts: &[(i64, ProxyHostInput)],
+    upstream_pools: &[(i64, UpstreamPoolInput)],
     redirects: &[(i64, RedirectHostInput)],
     deads: &[(i64, DeadHostInput)],
     streams: &[(i64, StreamInput)],
@@ -1212,6 +1448,7 @@ pub async fn import_replace(
     // full replace works whether or not FK enforcement is on.
     for table in [
         "proxy_hosts",
+        "upstream_pools",
         "redirect_hosts",
         "dead_hosts",
         "streams",
@@ -1301,6 +1538,23 @@ pub async fn import_replace(
         }
     }
 
+    for (id, pool) in upstream_pools {
+        sqlx::query(
+            "INSERT INTO upstream_pools (id, name, scheme, primary_host, primary_port, upstream, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(&pool.name)
+        .bind(pool.scheme.as_str())
+        .bind(&pool.primary_host)
+        .bind(pool.primary_port as i64)
+        .bind(upstream_json(&pool.upstream))
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     for (id, h) in hosts {
         sqlx::query(
             "INSERT INTO proxy_hosts (id, domains, forward_scheme, forward_host, forward_port, \
@@ -1308,7 +1562,7 @@ pub async fn import_replace(
              hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
              advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, \
              maintenance, gzip, error_pages, proxy_tuning, health_checks, enabled, created_at, updated_at) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(domains_json(&h.domains))
@@ -1326,6 +1580,7 @@ pub async fn import_replace(
         .bind(h.trust_forwarded_proto as i64)
         .bind(h.certificate_id)
         .bind(h.access_list_id)
+        .bind(h.upstream_pool_id)
         .bind(locations_json(&h.locations))
         .bind(h.advanced_snippet.as_deref())
         .bind(rate_limit_json(&h.rate_limit))

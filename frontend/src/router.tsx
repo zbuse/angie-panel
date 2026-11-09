@@ -95,6 +95,12 @@ const streamsRoute = createRoute({
   component: lazyRouteComponent(() => import('@/pages/streams'), 'StreamsPage'),
 })
 
+const upstreamPoolsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/upstream-pools',
+  component: lazyRouteComponent(() => import('@/pages/upstream-pools'), 'UpstreamPoolsPage'),
+})
+
 const sniRoutersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/sni-routers',
@@ -164,6 +170,7 @@ const routeTree = rootRoute.addChildren([
     redirectHostsRoute,
     deadHostsRoute,
     streamsRoute,
+    upstreamPoolsRoute,
     sniRoutersRoute,
     certificatesRoute,
     dnsProvidersRoute,

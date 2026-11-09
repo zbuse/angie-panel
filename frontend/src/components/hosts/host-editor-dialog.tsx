@@ -29,6 +29,7 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import { DomainChipsField } from '@/components/hosts/host-editor-fields'
+import { TemplatePicker } from '@/components/templates/template-picker'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -116,6 +117,7 @@ interface FormState {
   /** DNS-01 only: credential-profile id, or null = Angie answers itself. */
   new_cert_dns_provider: string | null
   access_list_id: number | null
+  upstream_pool_id: number | null
   locations: LocationDraft[]
   advanced_snippet: string
   rate_limit_enabled: boolean
@@ -246,6 +248,7 @@ function initialState(host: Host | null): FormState {
       new_cert_challenge: 'http',
       new_cert_dns_provider: null,
       access_list_id: null,
+      upstream_pool_id: null,
       locations: [],
       advanced_snippet: '',
       rate_limit_enabled: false,
@@ -319,6 +322,7 @@ function initialState(host: Host | null): FormState {
     new_cert_challenge: 'http',
     new_cert_dns_provider: null,
     access_list_id: host.access_list_id,
+    upstream_pool_id: host.upstream_pool_id,
     locations: host.locations.map((location) => ({
       path: location.path,
       forward_scheme: location.forward_scheme,
@@ -508,14 +512,87 @@ export function HostEditorForm({
     queryFn: () => api.listAccessLists(),
   })
   const accessLists = accessListsQuery.data?.access_lists ?? []
+  const upstreamPoolsQuery = useQuery({
+    queryKey: ['upstream-pools'],
+    queryFn: () => api.listUpstreamPools(),
+  })
+  const upstreamPools = upstreamPoolsQuery.data?.upstream_pools ?? []
 
   const [initialForm] = useState(() => initialState(host))
   const [form, setForm] = useState<FormState>(initialForm)
   const [formError, setFormError] = useState<string | null>(null)
   const [tab, setTab] = useState('details')
+  const [poolDialogOpen, setPoolDialogOpen] = useState(false)
+  const [poolName, setPoolName] = useState('')
+  const [poolHost, setPoolHost] = useState('')
+  const [poolPort, setPoolPort] = useState('80')
 
   const patch = (partial: Partial<FormState>) =>
     setForm((prev) => ({ ...prev, ...partial }))
+
+  const choosePool = (rawId: string) => {
+    const id = rawId === 'none' ? null : Number(rawId)
+    const pool = id === null ? undefined : upstreamPools.find((item) => item.id === id)
+    patch({
+      upstream_pool_id: id,
+      ...(pool
+        ? {
+            forward_scheme: pool.scheme,
+            forward_host: pool.primary_host,
+            forward_port: String(pool.primary_port),
+            balance_method: pool.upstream.method,
+            primary_weight: String(pool.upstream.primary_weight),
+            max_fails: String(pool.upstream.max_fails),
+            fail_timeout_secs: String(pool.upstream.fail_timeout_secs),
+            servers: pool.upstream.servers.map((server) => ({
+              host: server.host,
+              port: String(server.port),
+              weight: String(server.weight),
+              backup: server.backup,
+              down: server.down,
+            })),
+          }
+        : {}),
+    })
+  }
+
+  const createSharedPool = async () => {
+    const port = Number.parseInt(poolPort, 10)
+    if (!poolName.trim() || !poolHost.trim() || !Number.isInteger(port) || port < 1 || port > 65535) {
+      toast({
+        variant: 'destructive',
+        title: t('hosts.editor.upstreams.poolCreateFailed'),
+        description: t('hosts.editor.upstreams.poolRequired'),
+      })
+      return
+    }
+    try {
+      const pool = await api.createUpstreamPool({
+        name: poolName.trim(),
+        scheme: form.forward_scheme,
+        primary_host: poolHost.trim(),
+        primary_port: port,
+        upstream: {
+          servers: [],
+          method: form.balance_method,
+          primary_weight: Number.parseInt(form.primary_weight, 10) || 1,
+          max_fails: Number.parseInt(form.max_fails, 10) || 1,
+          fail_timeout_secs: Number.parseInt(form.fail_timeout_secs, 10) || 10,
+        },
+      })
+      await queryClient.invalidateQueries({ queryKey: ['upstream-pools'] })
+      choosePool(String(pool.id))
+      setPoolDialogOpen(false)
+      setPoolName('')
+      toast({ title: t('hosts.editor.upstreams.poolCreated') })
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: t('hosts.editor.upstreams.poolCreateFailed'),
+        description: error instanceof ApiError ? error.message : t('common.error'),
+      })
+    }
+  }
 
   // A wildcard domain can only be validated over DNS-01.
   const hostHasWildcard = form.domains.some((domain) => domain.startsWith('*.'))
@@ -671,6 +748,7 @@ export function HostEditorForm({
           }
         : undefined,
       access_list_id: form.access_list_id,
+      upstream_pool_id: form.upstream_pool_id,
       locations,
       advanced_snippet:
         form.advanced_snippet.trim() === '' ? null : form.advanced_snippet,
@@ -780,6 +858,39 @@ export function HostEditorForm({
 
   return (
     <form className="flex flex-col overflow-hidden" onSubmit={handleSubmit} noValidate>
+      <TemplatePicker
+        kind="http"
+        builtIns={[
+          { id: 'http-standard', name: t('templates.builtIn.standardHttp'), value: { websockets_upgrade: false, block_exploits: true } },
+          { id: 'http-websocket', name: t('templates.builtIn.websocket'), value: { websockets_upgrade: true, block_exploits: true } },
+          { id: 'http-internal', name: t('templates.builtIn.internal'), value: { websockets_upgrade: false, force_ssl: false, http3: false } },
+        ]}
+        value={{
+          ...form,
+          domains: [],
+          forward_host: '',
+          forward_port: '80',
+          certificate_id: null,
+          access_list_id: null,
+          upstream_pool_id: null,
+          new_cert: false,
+          mtls_ca_pem: '',
+          advanced_snippet: '',
+        } as unknown as Record<string, unknown>}
+        onApply={(value) => patch({
+          ...(value as Partial<FormState>),
+          domains: form.domains,
+          forward_scheme: form.forward_scheme,
+          forward_host: form.forward_host,
+          forward_port: form.forward_port,
+          certificate_id: form.certificate_id,
+          access_list_id: form.access_list_id,
+          upstream_pool_id: form.upstream_pool_id,
+          new_cert: false,
+          mtls_ca_pem: '',
+          advanced_snippet: '',
+        })}
+      />
       <Tabs
         value={tab}
         onValueChange={setTab}
@@ -1418,6 +1529,32 @@ export function HostEditorForm({
           <p className="text-sm text-muted-foreground">
             {t('hosts.editor.upstreams.description')}
           </p>
+
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="min-w-56 flex-1 space-y-2">
+              <Label htmlFor="host-shared-pool">{t('hosts.editor.upstreams.sharedPool')}</Label>
+              <Select
+                value={form.upstream_pool_id === null ? 'none' : String(form.upstream_pool_id)}
+                onValueChange={choosePool}
+              >
+                <SelectTrigger id="host-shared-pool"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">{t('hosts.editor.upstreams.hostSpecific')}</SelectItem>
+                  {upstreamPools.map((pool) => (
+                    <SelectItem key={pool.id} value={String(pool.id)}>{pool.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button type="button" variant="outline" onClick={() => {
+              setPoolHost(form.forward_host)
+              setPoolPort(form.forward_port)
+              setPoolDialogOpen(true)
+            }}>
+              <Plus aria-hidden="true" />
+              {t('hosts.editor.upstreams.createPool')}
+            </Button>
+          </div>
 
           <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
             <div className="space-y-2">
@@ -2303,6 +2440,34 @@ export function HostEditorForm({
           </Button>
         </DialogFooter>
       </div>
+      <Dialog open={poolDialogOpen} onOpenChange={setPoolDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('hosts.editor.upstreams.createPool')}</DialogTitle>
+            <DialogDescription>{t('hosts.editor.upstreams.poolCreateHint')}</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="host-pool-name">{t('hosts.editor.upstreams.poolName')}</Label>
+              <Input id="host-pool-name" value={poolName} onChange={(event) => setPoolName(event.target.value)} />
+            </div>
+            <div className="grid grid-cols-[1fr_8rem] gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="host-pool-primary">{t('hosts.editor.upstreams.serverHost')}</Label>
+                <Input id="host-pool-primary" value={poolHost} onChange={(event) => setPoolHost(event.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="host-pool-port">{t('hosts.editor.upstreams.serverPort')}</Label>
+                <Input id="host-pool-port" inputMode="numeric" value={poolPort} onChange={(event) => setPoolPort(event.target.value.replace(/[^0-9]/g, ''))} />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPoolDialogOpen(false)}>{t('common.cancel')}</Button>
+            <Button type="button" onClick={() => void createSharedPool()}>{t('common.save')}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </form>
   )
 }

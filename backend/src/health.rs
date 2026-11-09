@@ -319,6 +319,7 @@ mod tests {
             trust_forwarded_proto: false,
             certificate_id: None,
             access_list_id: None,
+            upstream_pool_id: None,
             locations: vec![],
             advanced_snippet: None,
             rate_limit: RateLimit::default(),

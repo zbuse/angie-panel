@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -123,6 +123,46 @@ describe('certificates page', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/certificates', expect.anything())
     // Each row names its CA.
     expect(await screen.findAllByText("Let's Encrypt")).toHaveLength(2)
+  })
+
+  it('deletes selected certificates sequentially and retains failures in the selection', async () => {
+    const user = userEvent.setup()
+    const order: string[] = []
+    let activeWrites = 0
+    let overlappingWrites = false
+    const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+      if (input === '/api/certificates' && (!init?.method || init.method === 'GET')) {
+        return jsonResponse({ certificates: [unknownCert, validCert] })
+      }
+      if (input === '/api/acme/cas') return jsonResponse(acmeCas)
+      if (input.startsWith('/api/certificates/') && init?.method === 'DELETE') {
+        activeWrites += 1
+        if (activeWrites > 1) overlappingWrites = true
+        order.push(input)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        activeWrites -= 1
+        if (input.endsWith('/2')) {
+          return jsonResponse({ error: { code: 'test_failure', message: 'certificate delete failed' } }, 409)
+        }
+        return jsonResponse({ ok: true })
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderPage()
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all certificates' }))
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(order).toHaveLength(2))
+    expect(order).toEqual(['/api/certificates/1', '/api/certificates/2'])
+    expect(overlappingWrites).toBe(false)
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: 'Select certificate for unknown.example.com' })).not.toBeChecked()
+      expect(screen.getByRole('checkbox', { name: 'Select certificate for example.com' })).toBeChecked()
+    })
+    confirmSpy.mockRestore()
   })
 })
 

@@ -128,8 +128,18 @@ async fn prepare(
     body: HostBody,
     exclude_id: Option<i64>,
 ) -> ApiResult<(ProxyHostInput, Option<i64>)> {
+    let mut raw = body.host;
+    if let Some(pool_id) = raw.upstream_pool_id {
+        let pool = repo::get_upstream_pool(&state.db, pool_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found(format!("no upstream pool #{pool_id}")))?;
+        raw.forward_scheme = pool.scheme;
+        raw.forward_host = pool.primary_host;
+        raw.forward_port = pool.primary_port;
+        raw.upstream = pool.upstream;
+    }
     let mut input = model::validate_host_input(
-        body.host,
+        raw,
         state.cfg.allow_advanced_snippets,
         &upstream_policy(state),
     )?;
@@ -285,6 +295,7 @@ fn host_to_input(h: &ProxyHost, enabled: bool) -> ProxyHostInput {
         trust_forwarded_proto: h.trust_forwarded_proto,
         certificate_id: h.certificate_id,
         access_list_id: h.access_list_id,
+        upstream_pool_id: h.upstream_pool_id,
         locations: h.locations.clone(),
         advanced_snippet: h.advanced_snippet.clone(),
         rate_limit: h.rate_limit.clone(),

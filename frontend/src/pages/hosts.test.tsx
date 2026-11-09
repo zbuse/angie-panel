@@ -33,6 +33,7 @@ const sampleHost: Host = {
   trust_forwarded_proto: false,
   certificate_id: null,
   access_list_id: null,
+  upstream_pool_id: null,
   locations: [],
   advanced_snippet: null,
   rate_limit: { enabled: false, rps: 0, burst: 0, nodelay: false, conn: 0 },
@@ -156,5 +157,24 @@ describe('proxy hosts page', () => {
     expect(
       await screen.findByText(/No proxy hosts yet/i),
     ).toBeInTheDocument()
+  })
+
+  it('selects hosts and applies a bulk enable action', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/hosts') return Promise.resolve(jsonResponse({ hosts: [sampleHost] }))
+      if (url === '/api/certificates') return Promise.resolve(jsonResponse({ certificates: [] }))
+      return Promise.resolve(jsonResponse({ ok: true, enabled: true }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderPage()
+    await screen.findByText('example.com')
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select example.com' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Enable' }))
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/hosts/1/enable',
+      expect.objectContaining({ method: 'POST' }),
+    )
   })
 })

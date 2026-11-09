@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { BulkActionBar, type BulkAction } from '@/components/bulk-action-bar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -41,12 +42,16 @@ import {
 } from '@/lib/api'
 import { useIsDirty } from '@/lib/use-dirty'
 import { toast } from '@/lib/toast'
+import { runSequentially } from '@/lib/bulk-actions'
 
 export function SniRoutersPage() {
   const { t } = useTranslation()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<SniRouter | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<SniRouter | null>(null)
+  const [selected, setSelected] = useState<Set<number>>(() => new Set())
+  const [bulkRunning, setBulkRunning] = useState(false)
+  const queryClient = useQueryClient()
 
   const routersQuery = useQuery({
     queryKey: ['sni-routers'],
@@ -58,6 +63,37 @@ export function SniRoutersPage() {
     queryKey: ['dashboard'],
     queryFn: () => api.getDashboard(),
   })
+  const routerList = routersQuery.data?.sni_routers ?? []
+  const selectedIds = [...selected].filter((id) => routerList.some((router) => router.id === id))
+
+  const runBulk = async (action: BulkAction) => {
+    if (action === 'delete' && !window.confirm(t('common.bulk.confirmDelete', { count: selectedIds.length }))) return
+    if (bulkRunning) return
+    setBulkRunning(true)
+    try {
+      const { failed } = await runSequentially(selectedIds, (id) =>
+        action === 'enable' ? api.enableSniRouter(id)
+          : action === 'disable' ? api.disableSniRouter(id)
+            : api.deleteSniRouter(id),
+      )
+      setSelected(new Set(failed.map(({ value }) => value)))
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['sni-routers'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+      ])
+      if (failed.length > 0) {
+        toast({
+          variant: 'destructive',
+          title: t('common.bulk.partialFailure', { failed: failed.length, total: selectedIds.length }),
+          description: failed[0].error instanceof ApiError ? failed[0].error.message : t('common.error'),
+        })
+      } else {
+        toast({ title: t('streams.unappliedTitle'), description: t('streams.unappliedBody') })
+      }
+    } finally {
+      setBulkRunning(false)
+    }
+  }
 
   const openCreate = () => {
     setEditing(null)
@@ -78,7 +114,7 @@ export function SniRoutersPage() {
           <h1 className="text-2xl font-semibold tracking-tight">
             {t('sniRouters.title')}
           </h1>
-          <Button className="shrink-0" onClick={openCreate}>
+          <Button className="shrink-0" onClick={openCreate} disabled={bulkRunning}>
             <Plus aria-hidden="true" />
             {t('sniRouters.add')}
           </Button>
@@ -89,6 +125,17 @@ export function SniRoutersPage() {
       </div>
 
       {!contextActive && hasEnabled && <EnableContextBanner />}
+
+      {routerList.length > 0 && (
+        <BulkActionBar
+          selectedCount={selectedIds.length}
+          totalCount={routerList.length}
+          allSelected={selectedIds.length > 0 && selectedIds.length === routerList.length}
+          disabled={bulkRunning}
+          onSelectAll={(checked) => setSelected(checked ? new Set(routerList.map((router) => router.id)) : new Set())}
+          onAction={(action) => void runBulk(action)}
+        />
+      )}
 
       {routersQuery.isPending ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -124,6 +171,7 @@ export function SniRoutersPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead><span className="sr-only">{t('common.bulk.selectAll')}</span></TableHead>
                   <TableHead>{t('sniRouters.table.name')}</TableHead>
                   <TableHead>{t('sniRouters.table.port')}</TableHead>
                   <TableHead>{t('sniRouters.table.routes')}</TableHead>
@@ -140,6 +188,14 @@ export function SniRoutersPage() {
                   <RouterRow
                     key={router.id}
                     router={router}
+                    selected={selected.has(router.id)}
+                    disabled={bulkRunning}
+                    onSelect={(checked) => setSelected((previous) => {
+                      const next = new Set(previous)
+                      if (checked) next.add(router.id)
+                      else next.delete(router.id)
+                      return next
+                    })}
                     onEdit={() => openEdit(router)}
                     onDelete={() => setDeleteTarget(router)}
                   />
@@ -213,11 +269,14 @@ function EnableContextBanner() {
 
 interface RouterRowProps {
   router: SniRouter
+  selected: boolean
+  disabled: boolean
+  onSelect: (selected: boolean) => void
   onEdit: () => void
   onDelete: () => void
 }
 
-function RouterRow({ router, onEdit, onDelete }: RouterRowProps) {
+function RouterRow({ router, selected, disabled, onSelect, onEdit, onDelete }: RouterRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -246,6 +305,15 @@ function RouterRow({ router, onEdit, onDelete }: RouterRowProps) {
 
   return (
     <TableRow>
+      <TableCell>
+        <input
+          type="checkbox"
+          aria-label={t('common.bulk.selectItem', { item: router.name })}
+          checked={selected}
+          disabled={disabled}
+          onChange={(event) => onSelect(event.target.checked)}
+        />
+      </TableCell>
       <TableCell className="font-medium">{router.name}</TableCell>
       <TableCell>
         <span className="font-mono text-sm">{router.incoming_port}</span>
@@ -270,7 +338,7 @@ function RouterRow({ router, onEdit, onDelete }: RouterRowProps) {
             <Button
               variant="ghost"
               size="icon-sm"
-              disabled={toggleMutation.isPending}
+              disabled={toggleMutation.isPending || disabled}
               aria-label={t('sniRouters.table.actions')}
             >
               {toggleMutation.isPending ? (
@@ -281,16 +349,16 @@ function RouterRow({ router, onEdit, onDelete }: RouterRowProps) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={onEdit}>
+            <DropdownMenuItem disabled={disabled} onSelect={onEdit}>
               {t('sniRouters.actions.edit')}
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => toggleMutation.mutate()}>
+            <DropdownMenuItem disabled={disabled} onSelect={() => toggleMutation.mutate()}>
               {router.enabled
                 ? t('sniRouters.actions.disable')
                 : t('sniRouters.actions.enable')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+            <DropdownMenuItem variant="destructive" disabled={disabled} onSelect={onDelete}>
               {t('sniRouters.actions.delete')}
             </DropdownMenuItem>
           </DropdownMenuContent>

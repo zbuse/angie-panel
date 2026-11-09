@@ -15,8 +15,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
-// The form loads the certificate and access-list pickers on mount; answer those
-// calls so it can render without hitting the network.
+// The form's supporting data queries are answered without hitting the network.
 function stubFetch(): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn((input: string) => {
     if (input === '/api/certificates') {
@@ -24,6 +23,12 @@ function stubFetch(): ReturnType<typeof vi.fn> {
     }
     if (input === '/api/access-lists') {
       return Promise.resolve(jsonResponse({ access_lists: [] }))
+    }
+    if (input === '/api/upstream-pools') {
+      return Promise.resolve(jsonResponse({ upstream_pools: [] }))
+    }
+    if (input === '/api/host-templates/http') {
+      return Promise.resolve(jsonResponse([]))
     }
     return Promise.reject(new Error(`unexpected fetch ${input}`))
   })
@@ -40,17 +45,26 @@ afterEach(() => {
 })
 
 function renderForm() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  })
+  const queryClient = createQueryClient()
   return render(
     <QueryClientProvider client={queryClient}>
       <HostEditorForm host={null} onDone={() => {}} />
     </QueryClientProvider>,
   )
+}
+
+function createQueryClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, staleTime: Infinity },
+      mutations: { retry: false },
+    },
+  })
+  queryClient.setQueryData(['certificates'], { certificates: [] })
+  queryClient.setQueryData(['access-lists'], { access_lists: [] })
+  queryClient.setQueryData(['upstream-pools'], { upstream_pools: [] })
+  queryClient.setQueryData(['host-templates', 'http'], [])
+  return queryClient
 }
 
 describe('host editor validation', () => {
@@ -112,12 +126,7 @@ describe('host editor validation', () => {
 
 describe('host editor unsaved-changes guard', () => {
   function renderDialog(onOpenChange: (open: boolean) => void) {
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    })
+    const queryClient = createQueryClient()
     return render(
       <QueryClientProvider client={queryClient}>
         <HostEditorDialog open onOpenChange={onOpenChange} host={null} />

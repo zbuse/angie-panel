@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -111,6 +111,59 @@ describe('streams page', () => {
 
     expect(await screen.findByText(/No streams yet/i)).toBeInTheDocument()
   })
+
+  it('runs selected stream actions sequentially and keeps failed rows selected', async () => {
+    const user = userEvent.setup()
+    const second: Stream = { ...sampleStream, id: 2, incoming_port: 5433 }
+    const calls: string[] = []
+    let activeWrites = 0
+    let overlappingWrites = false
+    const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+      if (input === '/api/streams' && (!init?.method || init.method === 'GET')) {
+        return jsonResponse({ streams: [sampleStream, second] })
+      }
+      if (input === '/api/dashboard') {
+        return jsonResponse({
+          angie: { up: false, version: null, generation: null, load_time: null, connections: null },
+          hosts: [],
+          certificates: [],
+          streams: { configured: 2, enabled: 2, context_active: true },
+          drift: { detected: false, foreign_files: [] },
+          pending_changes: false,
+          alerts: [],
+        })
+      }
+      if (input.startsWith('/api/streams/') && input.endsWith('/enable')) {
+        activeWrites += 1
+        if (activeWrites > 1) overlappingWrites = true
+        calls.push(input)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        activeWrites -= 1
+        if (input.endsWith('/2/enable')) {
+          return jsonResponse({ error: { code: 'test_failure', message: 'second stream failed' } }, 500)
+        }
+        return jsonResponse({ ok: true, enabled: true })
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <StreamsPage />
+      </QueryClientProvider>,
+    )
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all' }))
+    await user.click(screen.getByRole('button', { name: 'Enable' }))
+    await waitFor(() => expect(calls).toHaveLength(2))
+
+    expect(calls).toEqual(['/api/streams/1/enable', '/api/streams/2/enable'])
+    expect(overlappingWrites).toBe(false)
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: 'Select 5432' })).not.toBeChecked()
+      expect(screen.getByRole('checkbox', { name: 'Select 5433' })).toBeChecked()
+    })
+  })
 })
 
 describe('stream editor', () => {
@@ -177,7 +230,7 @@ describe('stream editor', () => {
     await user.type(screen.getByLabelText('Forward host'), '192.168.1.20')
     await user.type(screen.getByLabelText('Forward port'), '5432')
     // Switch the TLS mode Select to "Terminate TLS".
-    await user.click(screen.getByRole('combobox'))
+    await user.click(screen.getByRole('combobox', { name: 'TLS' }))
     await user.click(screen.getByRole('option', { name: 'Terminate TLS' }))
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
@@ -216,7 +269,7 @@ describe('stream editor', () => {
     await user.type(screen.getByLabelText('Forward host'), '192.168.1.20')
     await user.type(screen.getByLabelText('Forward port'), '5432')
     // Mode Select → Terminate TLS.
-    await user.click(screen.getByRole('combobox'))
+    await user.click(screen.getByRole('combobox', { name: 'TLS' }))
     await user.click(screen.getByRole('option', { name: 'Terminate TLS' }))
     // Certificate Select (the second combobox) → the streamcert cert.
     const combos = screen.getAllByRole('combobox')

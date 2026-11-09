@@ -350,7 +350,7 @@ async fn export_import_roundtrip_and_rejects_injection() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let export = body_json(res).await;
-    assert_eq!(export["version"], json!(2));
+    assert_eq!(export["version"], json!(3));
     assert_eq!(export["hosts"].as_array().unwrap().len(), 1);
     assert_eq!(export["certificates"].as_array().unwrap().len(), 1);
     assert_eq!(export["access_lists"].as_array().unwrap().len(), 1);
@@ -416,7 +416,7 @@ async fn export_import_roundtrip_and_rejects_injection() {
     // An import with an injected forward_host is rejected — validation runs on
     // untrusted import exactly like the API.
     let malicious = json!({
-        "version": 2,
+        "version": 3,
         "hosts": [{"id":1,"domains":["x.example.com"],"forward_scheme":"http",
             "forward_host":"1.2.3.4; } location /r { root /; ","forward_port":80}],
     });
@@ -434,7 +434,7 @@ async fn export_import_roundtrip_and_rejects_injection() {
 
     // A host referencing a non-existent certificate is rejected.
     let dangling = json!({
-        "version": 2,
+        "version": 3,
         "hosts": [{"id":1,"domains":["y.example.com"],"forward_scheme":"http",
             "forward_host":"10.0.0.9","forward_port":80,"certificate_id":999}],
     });
@@ -453,7 +453,7 @@ async fn export_import_roundtrip_and_rejects_injection() {
     // An access list whose user hash is not a real bcrypt hash is rejected
     // (it would land in an htpasswd file verbatim).
     let bad_hash = json!({
-        "version": 2,
+        "version": 3,
         "access_lists": [{"id":1,"name":"evil","satisfy":"all","pass_auth":false,
             "users":[{"username":"bob","password_hash":"not-a-hash\nroot:x"}],
             "clients":[]}],
@@ -505,6 +505,205 @@ async fn host_create_rejects_dangling_cert_and_acl_refs() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_hosts_can_share_a_global_upstream_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+    let pool_response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/upstream-pools",
+            Some(json!({
+                "name":"api backends",
+                "scheme":"https",
+                "primary_host":"10.0.0.10",
+                "primary_port":8443,
+                "upstream":{"servers":[{"host":"10.0.0.11","port":8443}],"method":"least_conn"}
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(pool_response.status(), StatusCode::OK);
+    let pool = body_json(pool_response).await;
+    let pool_id = pool["id"].as_i64().unwrap();
+
+    let host_response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains":["shared.example.com"],
+                "forward_scheme":"http",
+                "forward_host":"127.0.0.1",
+                "forward_port":1,
+                "upstream_pool_id":pool_id
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(host_response.status(), StatusCode::OK);
+    let host = body_json(host_response).await;
+    assert_eq!(host["upstream_pool_id"], json!(pool_id));
+    assert_eq!(host["forward_scheme"], json!("https"));
+    assert_eq!(host["forward_host"], json!("10.0.0.10"));
+
+    let update_response = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/upstream-pools/{pool_id}"),
+            Some(json!({
+                "name":"api backends",
+                "scheme":"http",
+                "primary_host":"10.0.0.20",
+                "primary_port":8080,
+                "upstream":{"servers":[{"host":"10.0.0.21","port":8080}],"method":"least_conn"}
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(update_response.status(), StatusCode::OK);
+
+    let refreshed_host = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/hosts/{}", host["id"].as_i64().unwrap()),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    let refreshed_host = body_json(refreshed_host).await;
+    assert_eq!(refreshed_host["forward_scheme"], json!("http"));
+    assert_eq!(refreshed_host["forward_host"], json!("10.0.0.20"));
+    assert_eq!(refreshed_host["forward_port"], json!(8080));
+
+    let delete_response = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/upstream-pools/{pool_id}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn shared_host_templates_are_kind_scoped_validated_and_crud_managed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    let created = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/host-templates/http",
+            Some(json!({"name":"Standard","value":{"websockets_upgrade":false}})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = body_json(created).await;
+    let id = created["id"].as_i64().unwrap();
+    assert_eq!(created["kind"], json!("http"));
+    assert_eq!(created["value"]["websockets_upgrade"], json!(false));
+
+    let stream_templates = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/host-templates/stream",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(stream_templates).await, json!([]));
+
+    let stream_created = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/host-templates/stream",
+            Some(json!({"name":"Standard","value":{"tcp":true,"udp":false}})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(stream_created.status(), StatusCode::OK);
+    assert_eq!(body_json(stream_created).await["kind"], json!("stream"));
+
+    let updated = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/host-templates/http/{id}"),
+            Some(json!({"name":"WebSocket","value":{"websockets_upgrade":true}})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    assert_eq!(body_json(updated).await["name"], json!("WebSocket"));
+
+    let duplicate = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/host-templates/http",
+            Some(json!({"name":"websocket","value":{}})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+
+    let invalid_value = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/host-templates/http",
+            Some(json!({"name":"Invalid","value":[]})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid_value.status(), StatusCode::BAD_REQUEST);
+
+    let deleted = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/host-templates/http/{id}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::OK);
+
+    let list = app
+        .oneshot(request(
+            Method::GET,
+            "/api/host-templates/http",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(list).await, json!([]));
 }
 
 #[tokio::test]

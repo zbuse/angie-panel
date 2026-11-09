@@ -4,6 +4,8 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ToggleRow } from '@/components/hosts/host-editor-fields'
+import { BulkActionBar, type BulkAction } from '@/components/bulk-action-bar'
+import { TemplatePicker } from '@/components/templates/template-picker'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -49,12 +51,16 @@ import {
 } from '@/lib/api'
 import { useIsDirty } from '@/lib/use-dirty'
 import { toast } from '@/lib/toast'
+import { runSequentially } from '@/lib/bulk-actions'
 
 export function StreamsPage() {
   const { t } = useTranslation()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<Stream | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Stream | null>(null)
+  const [selected, setSelected] = useState<Set<number>>(() => new Set())
+  const [bulkRunning, setBulkRunning] = useState(false)
+  const queryClient = useQueryClient()
 
   const streamsQuery = useQuery({
     queryKey: ['streams'],
@@ -80,6 +86,37 @@ export function StreamsPage() {
   const contextActive = dashboardQuery.data?.streams.context_active ?? true
   const hasEnabledStreams =
     streamsQuery.data?.streams.some((s) => s.enabled) ?? false
+  const streamList = streamsQuery.data?.streams ?? []
+  const selectedIds = [...selected].filter((id) => streamList.some((stream) => stream.id === id))
+
+  const runBulk = async (action: BulkAction) => {
+    if (action === 'delete' && !window.confirm(t('common.bulk.confirmDelete', { count: selectedIds.length }))) return
+    if (bulkRunning) return
+    setBulkRunning(true)
+    try {
+      const { failed } = await runSequentially(selectedIds, (id) =>
+        action === 'enable' ? api.enableStream(id)
+          : action === 'disable' ? api.disableStream(id)
+            : api.deleteStream(id),
+      )
+      setSelected(new Set(failed.map(({ value }) => value)))
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['streams'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+      ])
+      if (failed.length > 0) {
+        toast({
+          variant: 'destructive',
+          title: t('common.bulk.partialFailure', { failed: failed.length, total: selectedIds.length }),
+          description: failed[0].error instanceof ApiError ? failed[0].error.message : t('common.error'),
+        })
+      } else {
+        toast({ title: t('streams.unappliedTitle'), description: t('streams.unappliedBody') })
+      }
+    } finally {
+      setBulkRunning(false)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -88,7 +125,7 @@ export function StreamsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">
             {t('streams.title')}
           </h1>
-          <Button className="shrink-0" onClick={openCreate}>
+          <Button className="shrink-0" onClick={openCreate} disabled={bulkRunning}>
             <Plus aria-hidden="true" />
             {t('streams.add')}
           </Button>
@@ -97,6 +134,17 @@ export function StreamsPage() {
       </div>
 
       {!contextActive && <EnableContextBanner highlight={hasEnabledStreams} />}
+
+      {streamList.length > 0 && (
+        <BulkActionBar
+          selectedCount={selectedIds.length}
+          totalCount={streamList.length}
+          allSelected={selectedIds.length > 0 && selectedIds.length === streamList.length}
+          disabled={bulkRunning}
+          onSelectAll={(checked) => setSelected(checked ? new Set(streamList.map((stream) => stream.id)) : new Set())}
+          onAction={(action) => void runBulk(action)}
+        />
+      )}
 
       {streamsQuery.isPending ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -130,6 +178,7 @@ export function StreamsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead><span className="sr-only">{t('common.bulk.selectAll')}</span></TableHead>
                   <TableHead>{t('streams.table.incomingPort')}</TableHead>
                   <TableHead>{t('streams.table.forward')}</TableHead>
                   <TableHead>{t('streams.table.protocol')}</TableHead>
@@ -144,6 +193,14 @@ export function StreamsPage() {
                   <StreamRow
                     key={stream.id}
                     stream={stream}
+                    selected={selected.has(stream.id)}
+                    disabled={bulkRunning}
+                    onSelect={(checked) => setSelected((previous) => {
+                      const next = new Set(previous)
+                      if (checked) next.add(stream.id)
+                      else next.delete(stream.id)
+                      return next
+                    })}
                     onEdit={() => openEdit(stream)}
                     onDelete={() => setDeleteTarget(stream)}
                   />
@@ -226,11 +283,14 @@ function protocolLabel(stream: Stream, t: (key: string) => string): string {
 
 interface StreamRowProps {
   stream: Stream
+  selected: boolean
+  disabled: boolean
+  onSelect: (selected: boolean) => void
   onEdit: () => void
   onDelete: () => void
 }
 
-function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
+function StreamRow({ stream, selected, disabled, onSelect, onEdit, onDelete }: StreamRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -255,6 +315,15 @@ function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
 
   return (
     <TableRow>
+      <TableCell>
+        <input
+          type="checkbox"
+          aria-label={t('common.bulk.selectItem', { item: stream.incoming_port })}
+          checked={selected}
+          disabled={disabled}
+          onChange={(event) => onSelect(event.target.checked)}
+        />
+      </TableCell>
       <TableCell>
         <span className="font-mono text-sm">{stream.incoming_port}</span>
       </TableCell>
@@ -290,7 +359,7 @@ function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
             <Button
               variant="ghost"
               size="icon-sm"
-              disabled={toggleMutation.isPending}
+              disabled={toggleMutation.isPending || disabled}
               aria-label={t('streams.table.actions')}
             >
               {toggleMutation.isPending ? (
@@ -301,16 +370,16 @@ function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={onEdit}>
+            <DropdownMenuItem disabled={disabled} onSelect={onEdit}>
               {t('streams.actions.edit')}
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => toggleMutation.mutate()}>
+            <DropdownMenuItem disabled={disabled} onSelect={() => toggleMutation.mutate()}>
               {stream.enabled
                 ? t('streams.actions.disable')
                 : t('streams.actions.enable')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+            <DropdownMenuItem variant="destructive" disabled={disabled} onSelect={onDelete}>
               {t('streams.actions.delete')}
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -585,6 +654,25 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
+      <TemplatePicker
+        kind="stream"
+        builtIns={[
+          { id: 'stream-tcp', name: t('templates.builtIn.tcp'), value: { tcp: true, udp: false, tls: 'none' } },
+          { id: 'stream-udp', name: t('templates.builtIn.udp'), value: { tcp: false, udp: true, tls: 'none' } },
+          { id: 'stream-tls', name: t('templates.builtIn.tls'), value: { tcp: true, udp: false, tls: 'terminate' } },
+        ]}
+        value={{ tcp: form.tcp, udp: form.udp, tls: form.tls }}
+        onApply={(value) => {
+          const tls = value.tls as StreamTls
+          setForm((previous) => ({
+            ...previous,
+            tcp: tls === 'terminate' ? true : Boolean(value.tcp),
+            udp: tls === 'terminate' ? false : Boolean(value.udp),
+            tls,
+            certificate_id: tls === 'terminate' ? previous.certificate_id : null,
+          }))
+        }}
+      />
       <div className="space-y-2">
         <Label htmlFor="stream-incoming-port">
           {t('streams.editor.incomingPort')}
@@ -678,7 +766,7 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
           </p>
         </div>
         <Select value={form.tls} onValueChange={(v) => setTlsMode(v as StreamTls)}>
-          <SelectTrigger id="stream-tls-mode">
+          <SelectTrigger id="stream-tls-mode" aria-label={t('streams.editor.tls.title')}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

@@ -366,6 +366,7 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
 
     Ok(GeneratorInput {
         hosts,
+        upstream_pools: repo::list_upstream_pools(&state.db).await?,
         settings,
         snippets_dir: state.cfg.angie.snippets_dir.clone(),
         status_port: status_port(state),

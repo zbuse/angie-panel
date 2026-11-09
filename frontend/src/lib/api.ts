@@ -131,6 +131,35 @@ export interface Upstream {
   fail_timeout_secs: number
 }
 
+export interface UpstreamPool {
+  id: number
+  name: string
+  scheme: ForwardScheme
+  primary_host: string
+  primary_port: number
+  upstream: Upstream
+  created_at: number
+  updated_at: number
+}
+
+export type UpstreamPoolInput = Pick<
+  UpstreamPool,
+  'name' | 'scheme' | 'primary_host' | 'primary_port' | 'upstream'
+>
+
+export type HostTemplateKind = 'http' | 'stream'
+
+export interface HostTemplate {
+  id: number
+  kind: HostTemplateKind
+  name: string
+  value: Record<string, unknown>
+  created_at: number
+  updated_at: number
+}
+
+export type HostTemplateInput = Pick<HostTemplate, 'name' | 'value'>
+
 export interface Ban {
   id: number
   /** Bare IP or IP/CIDR (v4 or v6). */
@@ -281,6 +310,7 @@ export interface Host {
   trust_forwarded_proto: boolean
   certificate_id: number | null
   access_list_id: number | null
+  upstream_pool_id: number | null
   locations: Location[]
   advanced_snippet: string | null
   rate_limit: RateLimit
@@ -317,6 +347,7 @@ export interface HostInput {
   trust_forwarded_proto?: boolean
   certificate_id?: number | null
   access_list_id?: number | null
+  upstream_pool_id?: number | null
   locations?: Location[]
   advanced_snippet?: string | null
   rate_limit?: RateLimit
@@ -957,6 +988,30 @@ export const api = {
 
   disableHost: (id: number) =>
     request<{ ok: true; enabled: false }>('POST', `/api/hosts/${id}/disable`),
+
+  listUpstreamPools: () =>
+    request<{ upstream_pools: UpstreamPool[] }>('GET', '/api/upstream-pools'),
+
+  createUpstreamPool: (body: UpstreamPoolInput) =>
+    request<UpstreamPool>('POST', '/api/upstream-pools', body),
+
+  updateUpstreamPool: (id: number, body: UpstreamPoolInput) =>
+    request<UpstreamPool>('PUT', `/api/upstream-pools/${id}`, body),
+
+  deleteUpstreamPool: (id: number) =>
+    request<OkResponse>('DELETE', `/api/upstream-pools/${id}`),
+
+  listHostTemplates: (kind: HostTemplateKind) =>
+    request<HostTemplate[]>('GET', `/api/host-templates/${kind}`),
+
+  createHostTemplate: (kind: HostTemplateKind, body: HostTemplateInput) =>
+    request<HostTemplate>('POST', `/api/host-templates/${kind}`, body),
+
+  updateHostTemplate: (kind: HostTemplateKind, id: number, body: HostTemplateInput) =>
+    request<HostTemplate>('PUT', `/api/host-templates/${kind}/${id}`, body),
+
+  deleteHostTemplate: (kind: HostTemplateKind, id: number) =>
+    request<OkResponse>('DELETE', `/api/host-templates/${kind}/${id}`),
 
   listRedirectHosts: () =>
     request<{ redirect_hosts: RedirectHost[] }>('GET', '/api/redirect-hosts'),

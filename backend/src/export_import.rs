@@ -23,14 +23,13 @@ use serde_json::{json, Value};
 use crate::model::{
     self, AccessListClientInput, AccessListInput, AccessListUserInput, CertificateInput,
     DeadHostInput, Directive, ProxyHostInput, RedirectHostInput, Satisfy, StreamInput,
-    UpstreamPolicy,
+    UpstreamPolicy, UpstreamPoolInput,
 };
 use crate::repo::{self, AclImportRow, AclUserHash};
 use crate::{auth::AuthUser, error::ApiError, error::ApiResult, state::AppState};
 
-/// Bumped from 1 → 2 when redirect/404/stream hosts + access lists joined the
-/// document. v1 backups (proxy hosts + certs + settings only) are not accepted.
-const EXPORT_VERSION: u32 = 2;
+/// v3 adds globally shared upstream pools.
+const EXPORT_VERSION: u32 = 3;
 
 #[derive(Serialize)]
 struct Export {
@@ -39,6 +38,7 @@ struct Export {
     certificates: Vec<Value>,
     access_lists: Vec<Value>,
     hosts: Vec<Value>,
+    upstream_pools: Vec<Value>,
     redirect_hosts: Vec<Value>,
     dead_hosts: Vec<Value>,
     streams: Vec<Value>,
@@ -63,6 +63,7 @@ pub async fn export(u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResul
     // hashes). GET is not covered by the method-based role gate, so guard here.
     u.require_admin()?;
     let hosts = repo::list_hosts(&state.db).await?;
+    let upstream_pools = repo::list_upstream_pools(&state.db).await?;
     let certs = repo::list_certs(&state.db).await?;
     let redirects = repo::list_redirects(&state.db).await?;
     let deads = repo::list_dead(&state.db).await?;
@@ -105,6 +106,7 @@ pub async fn export(u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResul
         certificates: to_values(&certs),
         access_lists,
         hosts: to_values(&hosts),
+        upstream_pools: to_values(&upstream_pools),
         redirect_hosts: to_values(&redirects),
         dead_hosts: to_values(&deads),
         streams: to_values(&streams),
@@ -126,6 +128,8 @@ pub struct ImportDoc {
     access_lists: Vec<Value>,
     #[serde(default)]
     hosts: Vec<Value>,
+    #[serde(default)]
+    upstream_pools: Vec<Value>,
     #[serde(default)]
     redirect_hosts: Vec<Value>,
     #[serde(default)]
@@ -294,13 +298,39 @@ pub async fn import(
     // Domain uniqueness is CROSS-TYPE among enabled hosts (proxy/redirect/dead).
     let mut enabled_domains = std::collections::HashSet::new();
 
+    // --- shared upstream pools ---
+    let mut upstream_pools: Vec<(i64, UpstreamPoolInput)> = Vec::new();
+    let mut upstream_pool_ids = std::collections::HashSet::new();
+    let mut upstream_pool_names = std::collections::HashSet::new();
+    for (i, v) in doc.upstream_pools.iter().enumerate() {
+        let id = extract_id(v).ok_or_else(|| bad_entry("upstream pool", i, "missing numeric id"))?;
+        let input: UpstreamPoolInput = serde_json::from_value(v.clone())
+            .map_err(|e| bad_entry("upstream pool", i, &e.to_string()))?;
+        let input = model::validate_upstream_pool_input(input, &policy)?;
+        if !upstream_pool_ids.insert(id) {
+            return Err(bad_entry("upstream pool", i, "duplicate id"));
+        }
+        if !upstream_pool_names.insert(input.name.to_ascii_lowercase()) {
+            return Err(bad_entry("upstream pool", i, "duplicate name"));
+        }
+        upstream_pools.push((id, input));
+    }
+
     // --- proxy hosts ---
     let mut hosts: Vec<(i64, ProxyHostInput)> = Vec::new();
     let mut host_ids = std::collections::HashSet::new();
     for (i, v) in doc.hosts.iter().enumerate() {
         let id = extract_id(v).ok_or_else(|| bad_entry("host", i, "missing numeric id"))?;
-        let input: ProxyHostInput =
+        let mut input: ProxyHostInput =
             serde_json::from_value(v.clone()).map_err(|e| bad_entry("host", i, &e.to_string()))?;
+        if let Some(pool_id) = input.upstream_pool_id {
+            let pool = upstream_pools.iter().find(|(id, _)| *id == pool_id)
+                .ok_or_else(|| bad_entry("host", i, "upstream_pool_id references a pool not present in the import"))?;
+            input.forward_scheme = pool.1.scheme;
+            input.forward_host = pool.1.primary_host.clone();
+            input.forward_port = pool.1.primary_port;
+            input.upstream = pool.1.upstream.clone();
+        }
         let input = model::validate_host_input(input, state.cfg.allow_advanced_snippets, &policy)?;
         if !host_ids.insert(id) {
             return Err(bad_entry("host", i, "duplicate id"));
@@ -525,6 +555,7 @@ pub async fn import(
         &certs,
         &acls,
         &hosts,
+        &upstream_pools,
         &redirects,
         &deads,
         &streams,
