@@ -92,7 +92,7 @@ pub async fn update(
     let user_id = user.require_user_id()?;
     if repo::get_host_template(&state.db, user_id, id)
         .await?
-        .map_or(true, |template| template.kind != kind)
+        .is_none_or(|template| template.kind != kind)
     {
         return Err(ApiError::not_found(format!(
             "no {raw_kind} host template #{id}"

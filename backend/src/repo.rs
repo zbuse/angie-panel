@@ -1575,7 +1575,8 @@ pub async fn import_replace(
         sqlx::query(
             "INSERT INTO proxy_hosts (id, domains, forward_scheme, forward_host, forward_port, \
              websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
-             hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
+             hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, \
+             upstream_pool_id, locations, \
              advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, \
              maintenance, gzip, error_pages, proxy_tuning, health_checks, enabled, created_at, updated_at) \
              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
