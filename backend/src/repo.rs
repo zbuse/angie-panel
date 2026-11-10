@@ -425,10 +425,7 @@ pub async fn list_upstream_pools(db: &SqlitePool) -> anyhow::Result<Vec<Upstream
     rows.into_iter().map(UpstreamPoolRow::into_model).collect()
 }
 
-pub async fn get_upstream_pool(
-    db: &SqlitePool,
-    id: i64,
-) -> anyhow::Result<Option<UpstreamPool>> {
+pub async fn get_upstream_pool(db: &SqlitePool, id: i64) -> anyhow::Result<Option<UpstreamPool>> {
     let row = sqlx::query_as::<_, UpstreamPoolRow>(
         "SELECT id, name, scheme, primary_host, primary_port, upstream, created_at, updated_at \
          FROM upstream_pools WHERE id = ?",
@@ -508,10 +505,12 @@ pub async fn delete_upstream_pool(db: &SqlitePool, id: i64) -> anyhow::Result<bo
 }
 
 pub async fn upstream_pool_host_count(db: &SqlitePool, id: i64) -> anyhow::Result<i64> {
-    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM proxy_hosts WHERE upstream_pool_id = ?")
-        .bind(id)
-        .fetch_one(db)
-        .await?)
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM proxy_hosts WHERE upstream_pool_id = ?")
+            .bind(id)
+            .fetch_one(db)
+            .await?,
+    )
 }
 
 // -------------------------------------------------------------- host templates

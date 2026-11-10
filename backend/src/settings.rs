@@ -107,25 +107,6 @@ pub async fn effective_settings(state: &AppState) -> ApiResult<EffectiveSettings
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::effective_resolvers;
-
-    #[test]
-    fn resolver_defaults_to_systemd_resolved_stub() {
-        assert_eq!(effective_resolvers(None), ["127.0.0.53"]);
-        assert_eq!(effective_resolvers(Some("  ")), ["127.0.0.53"]);
-    }
-
-    #[test]
-    fn resolver_override_replaces_default() {
-        assert_eq!(
-            effective_resolvers(Some("1.1.1.1, 2001:4860:4860::8888")),
-            ["1.1.1.1", "2001:4860:4860::8888"]
-        );
-    }
-}
-
 /// Parse the loopback port the status API listens on, from status_api_url.
 fn status_port(state: &AppState) -> u16 {
     state
@@ -424,4 +405,23 @@ pub async fn build_fileset(state: &Arc<AppState>) -> ApiResult<FileSet> {
         ));
     }
     Ok(wrapped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_resolvers;
+
+    #[test]
+    fn resolver_defaults_to_systemd_resolved_stub() {
+        assert_eq!(effective_resolvers(None), ["127.0.0.53"]);
+        assert_eq!(effective_resolvers(Some("  ")), ["127.0.0.53"]);
+    }
+
+    #[test]
+    fn resolver_override_replaces_default() {
+        assert_eq!(
+            effective_resolvers(Some("1.1.1.1, 2001:4860:4860::8888")),
+            ["1.1.1.1", "2001:4860:4860::8888"]
+        );
+    }
 }

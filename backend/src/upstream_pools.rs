@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
-use crate::model::{self, UpstreamPool, UpstreamPoolInput, UpstreamPolicy};
+use crate::model::{self, UpstreamPolicy, UpstreamPool, UpstreamPoolInput};
 use crate::repo;
 use crate::state::AppState;
 
@@ -44,10 +44,7 @@ async fn validate_name_unique(
     Ok(())
 }
 
-pub async fn list(
-    _user: AuthUser,
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<Json<Value>> {
+pub async fn list(_user: AuthUser, State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
     let pools = repo::list_upstream_pools(&state.db).await?;
     Ok(Json(json!({ "upstream_pools": pools })))
 }
@@ -60,7 +57,9 @@ pub async fn create(
     let input = model::validate_upstream_pool_input(raw, &policy(&state))?;
     validate_name_unique(&state, &input, None).await?;
     let id = repo::insert_upstream_pool(&state.db, &input).await?;
-    let pool = repo::get_upstream_pool(&state.db, id).await?.expect("inserted pool");
+    let pool = repo::get_upstream_pool(&state.db, id)
+        .await?
+        .expect("inserted pool");
     Ok(Json(pool))
 }
 
@@ -78,7 +77,9 @@ pub async fn update(
     if !repo::update_upstream_pool(&state.db, id, &input).await? {
         return Err(ApiError::not_found(format!("no upstream pool #{id}")));
     }
-    let pool = repo::get_upstream_pool(&state.db, id).await?.expect("updated pool");
+    let pool = repo::get_upstream_pool(&state.db, id)
+        .await?
+        .expect("updated pool");
     Ok(Json(pool))
 }
 

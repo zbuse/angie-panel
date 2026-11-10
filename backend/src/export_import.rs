@@ -303,7 +303,8 @@ pub async fn import(
     let mut upstream_pool_ids = std::collections::HashSet::new();
     let mut upstream_pool_names = std::collections::HashSet::new();
     for (i, v) in doc.upstream_pools.iter().enumerate() {
-        let id = extract_id(v).ok_or_else(|| bad_entry("upstream pool", i, "missing numeric id"))?;
+        let id =
+            extract_id(v).ok_or_else(|| bad_entry("upstream pool", i, "missing numeric id"))?;
         let input: UpstreamPoolInput = serde_json::from_value(v.clone())
             .map_err(|e| bad_entry("upstream pool", i, &e.to_string()))?;
         let input = model::validate_upstream_pool_input(input, &policy)?;
@@ -324,8 +325,16 @@ pub async fn import(
         let mut input: ProxyHostInput =
             serde_json::from_value(v.clone()).map_err(|e| bad_entry("host", i, &e.to_string()))?;
         if let Some(pool_id) = input.upstream_pool_id {
-            let pool = upstream_pools.iter().find(|(id, _)| *id == pool_id)
-                .ok_or_else(|| bad_entry("host", i, "upstream_pool_id references a pool not present in the import"))?;
+            let pool = upstream_pools
+                .iter()
+                .find(|(id, _)| *id == pool_id)
+                .ok_or_else(|| {
+                    bad_entry(
+                        "host",
+                        i,
+                        "upstream_pool_id references a pool not present in the import",
+                    )
+                })?;
             input.forward_scheme = pool.1.scheme;
             input.forward_host = pool.1.primary_host.clone();
             input.forward_port = pool.1.primary_port;

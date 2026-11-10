@@ -434,8 +434,9 @@ fn shared_upstream_pool_is_emitted_once_and_referenced_by_hosts() {
     let files = generate(&gi).unwrap();
     assert!(files["18-upstream-pools.conf"].contains("upstream shared_pool_7"));
     assert!(files["18-upstream-pools.conf"].contains("server 10.0.0.10:8443;"));
-    assert!(files["20-host-1-shared-example-com.conf"]
-        .contains("proxy_pass https://shared_pool_7;"));
+    assert!(
+        files["20-host-1-shared-example-com.conf"].contains("proxy_pass https://shared_pool_7;")
+    );
     assert!(!files["20-host-1-shared-example-com.conf"].contains("upstream host_1"));
 }
 
@@ -898,7 +899,10 @@ fn forward_auth_identity_headers_restore_the_full_proxy_header_set_per_location(
             "proxy_set_header X-Tenant \"shared\";",
             "proxy_set_header Remote-User $fa_0;",
         ] {
-            assert!(block.contains(header), "{path} is missing {header}:\n{block}");
+            assert!(
+                block.contains(header),
+                "{path} is missing {header}:\n{block}"
+            );
         }
         assert!(
             block.find("proxy_set_header X-Tenant").unwrap()

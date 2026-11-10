@@ -856,12 +856,7 @@ fn emit_response_headers(out: &mut String, host: &ProxyHost) {
 /// headers whenever that location adds `proxy_set_header`: Angie then replaces
 /// the inherited set instead of merging it. Custom headers remain last so they
 /// can override defaults; an empty value strips the header upstream.
-fn emit_request_headers(
-    out: &mut String,
-    input: &GeneratorInput,
-    host: &ProxyHost,
-    indent: &str,
-) {
+fn emit_request_headers(out: &mut String, input: &GeneratorInput, host: &ProxyHost, indent: &str) {
     let _ = writeln!(out, "{indent}proxy_set_header Host $host;");
     let _ = writeln!(
         out,
@@ -877,7 +872,10 @@ fn emit_request_headers(
     }
     if host.websockets_upgrade {
         let _ = writeln!(out, "{indent}proxy_set_header Upgrade $http_upgrade;");
-        let _ = writeln!(out, "{indent}proxy_set_header Connection $connection_upgrade;");
+        let _ = writeln!(
+            out,
+            "{indent}proxy_set_header Connection $connection_upgrade;"
+        );
     }
     if let Some(list) = host
         .access_list_id
@@ -1214,7 +1212,10 @@ fn gen_upstream_pools(pools: &[UpstreamPool]) -> String {
             let _ = writeln!(out, "    {method};");
         }
         let health = if up.max_fails != 1 || up.fail_timeout_secs != 10 {
-            format!(" max_fails={} fail_timeout={}s", up.max_fails, up.fail_timeout_secs)
+            format!(
+                " max_fails={} fail_timeout={}s",
+                up.max_fails, up.fail_timeout_secs
+            )
         } else {
             String::new()
         };
@@ -1748,11 +1749,7 @@ fn location_upstream_ref(loc: &CustomLocation) -> String {
 
 /// Emit proxy_pass into an open `location` block. Common proxy headers are
 /// inherited from the enclosing server block.
-fn proxy_body(
-    out: &mut String,
-    scheme: Scheme,
-    target: &str,
-) {
+fn proxy_body(out: &mut String, scheme: Scheme, target: &str) {
     let _ = writeln!(out, "        proxy_pass {}://{target};", scheme.as_str());
 }
 

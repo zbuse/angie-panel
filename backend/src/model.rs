@@ -365,7 +365,10 @@ pub fn validate_custom_headers(headers: Vec<CustomHeader>) -> Result<Vec<CustomH
 
 fn validate_header_value(raw: &str, allow_variables: bool) -> Result<String, ApiError> {
     if !raw.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
-        return Err(bad("invalid_header", "header value contains control characters"));
+        return Err(bad(
+            "invalid_header",
+            "header value contains control characters",
+        ));
     }
     let s = raw.trim();
     if s.len() > MAX_HEADER_VALUE_LEN {
@@ -386,7 +389,10 @@ fn validate_header_value(raw: &str, allow_variables: bool) -> Result<String, Api
                 || i + 1 == bytes.len()
                 || !(bytes[i + 1].is_ascii_alphanumeric() || bytes[i + 1] == b'_')
             {
-                return Err(bad("invalid_header", "invalid nginx variable in header value"));
+                return Err(bad(
+                    "invalid_header",
+                    "invalid nginx variable in header value",
+                ));
             }
             i += 1;
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
@@ -829,9 +835,15 @@ pub fn validate_upstream_pool_input(
     input.name = input.name.trim().to_string();
     if input.name.is_empty()
         || input.name.len() > 64
-        || !input.name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'-' | b'_' | b'.'))
+        || !input
+            .name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'-' | b'_' | b'.'))
     {
-        return Err(bad("invalid_upstream_pool", "pool name must be 1-64 safe ASCII characters"));
+        return Err(bad(
+            "invalid_upstream_pool",
+            "pool name must be 1-64 safe ASCII characters",
+        ));
     }
     input.primary_host = validate_forward_host(&input.primary_host, policy)?;
     if input.primary_port == 0 {
@@ -3270,7 +3282,9 @@ mod tests {
             upstream: Upstream::default(),
         };
         assert_eq!(
-            validate_upstream_pool_input(valid, &policy()).unwrap().primary_host,
+            validate_upstream_pool_input(valid, &policy())
+                .unwrap()
+                .primary_host,
             "10.0.0.10"
         );
         for name in ["".to_string(), "bad; }".to_string(), "x".repeat(65)] {

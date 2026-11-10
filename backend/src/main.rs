@@ -19,8 +19,8 @@ mod generator;
 mod geo;
 mod health;
 mod helper;
-mod hosts;
 mod host_templates;
+mod hosts;
 mod model;
 mod other_hosts;
 mod reconcile;
@@ -31,10 +31,10 @@ mod settings;
 mod sni_routers;
 mod state;
 mod streams;
-mod upstream_pools;
 mod system;
 mod systemd;
 mod tokens;
+mod upstream_pools;
 mod users;
 
 #[cfg(test)]
